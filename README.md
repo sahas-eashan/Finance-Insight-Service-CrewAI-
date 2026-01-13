@@ -3,6 +3,8 @@
 ## Overview
 Finance Insight Service uses a plan -> execute -> audit -> repair cycle to deliver finance news, a market snapshot, and bounded scenarios. It prioritizes accuracy over speed and avoids "LLM does math" errors by routing all calculations through a sandboxed Python execution tool.
 
+Note: Copy `.env.example` to `.env` and add `OPENAI_API_KEY` plus either `SERPER_API_KEY` or `SERPAPI_API_KEY`.
+
 ## Goals and constraints
 - Deliver finance news + stock brief + bounded scenarios + non-personalized "watch/monitor/avoid" outputs.
 - Prioritize maximum accuracy over speed via review loops.
@@ -34,6 +36,8 @@ Tools (2):
 - SerperDevTool (CrewAI) or SerpApiGoogleSearchTool (CrewAI) for web/news discovery (free keys).
   - Serper tool: https://docs.crewai.com/en/tools/search-research/serperdevtool
   - SerpApi tool: https://docs.crewai.com/en/tools/search-research/serpapi-googlesearchtool
+- Requires `SERPER_API_KEY` for Serper or `SERPAPI_API_KEY` for SerpApi (different services).
+- Searches can be scoped to specific domains using `site:example.com` filters (for example: `site:reuters.com OR site:bloomberg.com`).
 - ScrapeWebsiteTool (CrewAI) to fetch full article content (not just snippets):
   - https://docs.crewai.com/en/tools/search-research/scrapewebsitetool
 

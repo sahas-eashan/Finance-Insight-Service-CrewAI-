@@ -1,0 +1,44 @@
+research_news_task:
+  description: >
+    You are given a research request:
+    Query: {query}
+    Tickers: {tickers}
+    Sites (optional): {sites}
+    Lookback days: {days}
+    Max articles: {max_articles}
+    Search query: {search_query}
+
+    Use SerperDevTool or SerpApiGoogleSearchTool to discover relevant articles
+    with search_query. If tickers are provided, include them in the search terms.
+    If sites are provided, use site: filters (for example: site:reuters.com OR
+    site:bloomberg.com). The search is not limited to 3 sources; gather up to
+    Max articles.
+
+    For each article you choose, use ScrapeWebsiteTool to read the full content.
+    If the search results include a source_url, prefer that; otherwise use the link.
+
+    Extract for each article:
+    - headline or title (if present)
+    - published timestamp (ISO 8601 if present; otherwise use "unknown")
+    - 1 to 3 key points grounded in the article
+
+    Cluster the articles into 2 to 4 drivers (earnings, macro, regulation, product
+    news, etc.). For each driver, explain "why it matters" using only evidence from
+    the scraped sources.
+
+    Rules:
+    - Do not invent facts, dates, or citations.
+    - If a URL cannot be accessed or lacks a publish time, note that in limitations.
+    - Use only the sources you retrieved in this run.
+  expected_output: >
+    Return strict JSON with these keys:
+    - drivers: list of 2 to 4 objects with fields:
+      - driver: short title
+      - why_it_matters: 1 to 3 sentences
+      - citations: list of objects with fields url, published_at, evidence
+    - articles: list of objects with fields:
+      - url
+      - headline
+      - published_at
+      - key_points (list of strings)
+    - limitations: list of strings (empty if none)

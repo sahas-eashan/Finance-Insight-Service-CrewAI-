@@ -3,7 +3,7 @@ import os
 
 from dotenv import load_dotenv
 
-from finance_insight_service.crew import FinanceInsightResearchCrew
+from finance_insight_service.crew import FinanceInsightCrew
 
 
 def main() -> None:
@@ -68,7 +68,8 @@ def main() -> None:
     if not inputs["query"]:
         raise SystemExit("--query must be non-empty.")
 
-    result = FinanceInsightResearchCrew().crew().kickoff(inputs=inputs)
+    crew = FinanceInsightCrew().build_crew(["research"])
+    result = crew.kickoff(inputs=inputs)
     print(result)
 
 

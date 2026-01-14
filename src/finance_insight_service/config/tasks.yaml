@@ -42,3 +42,66 @@ research_news_task:
       - published_at
       - key_points (list of strings)
     - limitations: list of strings (empty if none)
+
+quant_snapshot_task:
+  description: >
+    You are given a quantitative request:
+    Symbol: {symbol}
+    Interval: {interval}
+    Output size: {outputsize}
+    Horizon days: {horizon_days}
+    Request: {request}
+    Provided data (optional): {provided_data}
+
+    Decide which computations are needed based on the Request. Do not compute
+    everything by default.
+
+    If provided_data is supplied, use it and do not call market_data_fetch unless
+    the Request explicitly asks for fresh market data.
+    If provided_data is not supplied and market data is needed, use market_data_fetch.
+
+    Use safe_python_exec as a calculator. Prefer small, single-purpose scripts.
+    Each call should accept simplified input data, compute one logical step,
+    and print a single JSON object to stdout. Allowed modules: math, statistics,
+    datetime, time, json, numpy, pandas.
+
+    If safe_python_exec returns CODE_ERROR, fix the code and retry. Do not proceed
+    until you get SUCCESS or you have retried 3 times, then return the error in
+    limitations.
+
+    Coding rules (important to avoid exec errors):
+    - No leading indentation at top-level lines.
+    - Use 4 spaces for indents inside blocks only.
+    - Do not include code fences or markdown in the code string.
+    - Prefer single-line expressions over multi-line blocks where possible.
+    - When parsing dates, use pandas to_datetime with errors="coerce" and format="mixed".
+    - Normalize input data before building the DataFrame:
+      - If data is a JSON string, parse it with json.loads.
+      - If data is a dict with a "data" key, use data["data"] as records.
+      - If data is a list, use it directly as records.
+      - If records are strings, parse each element with json.loads.
+      - If required columns are missing, return a limitation explaining it.
+    - Do not call exit(); return a limitations list instead.
+
+    Default fallback (when Request is empty or unclear):
+    - last_close, returns_1d, volatility_annualized, data_points.
+
+    Scenarios (only if relevant to the Request):
+    - base: expected return over horizon_days
+    - bull: expected return + 1.0 * volatility over horizon_days
+    - bear: expected return - 1.0 * volatility over horizon_days
+
+    Use the last_close as the starting price if scenarios are computed. Explain
+    assumptions in the output.
+
+    Output must include as_of, snapshot, and limitations. Include scenarios only
+    if you computed them.
+
+    Use only the available data; if data is missing, state limitations.
+  expected_output: >
+    Return strict JSON with these keys:
+    - as_of: object with timestamp and provider
+    - snapshot: object with data_points and computed metrics (keys vary by Request)
+    - scenarios: optional object with base, bull, bear each containing price_target,
+      range_low, range_high, and assumptions
+    - limitations: list of strings (empty if none)

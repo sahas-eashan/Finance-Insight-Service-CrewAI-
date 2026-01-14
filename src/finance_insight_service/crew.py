@@ -4,10 +4,13 @@ from crewai import Agent, Crew, Process, Task
 from crewai.project import CrewBase, agent, crew, task
 from crewai_tools import ScrapeWebsiteTool, SerpApiGoogleSearchTool, SerperDevTool
 
+from finance_insight_service.tools.market_data_fetch import MarketDataFetchTool
+from finance_insight_service.tools.safe_python_exec import SafePythonExecTool
+
 
 @CrewBase
-class FinanceInsightResearchCrew:
-    """Research crew for finance news discovery and synthesis."""
+class FinanceInsightCrew:
+    """Research + quant crew for finance insight service."""
 
     agents_config = "config/agents.yaml"
     tasks_config = "config/tasks.yaml"
@@ -22,6 +25,15 @@ class FinanceInsightResearchCrew:
             allow_delegation=False,
         )
 
+    @agent
+    def quant(self) -> Agent:
+        return Agent(
+            config=self.agents_config["quant"],
+            tools=[MarketDataFetchTool(), SafePythonExecTool()],
+            verbose=True,
+            allow_delegation=False,
+        )
+
     @task
     def research_news_task(self) -> Task:
         return Task(
@@ -29,15 +41,44 @@ class FinanceInsightResearchCrew:
             agent=self.researcher(),
         )
 
-    @crew
-    def crew(self) -> Crew:
-        """Creates the Finance Insight Research crew."""
+    @task
+    def quant_snapshot_task(self) -> Task:
+        return Task(
+            config=self.tasks_config["quant_snapshot_task"],
+            agent=self.quant(),
+        )
+
+    def build_crew(self, task_names: list[str] | None = None) -> Crew:
+        task_map = {
+            "research": self.research_news_task(),
+            "quant": self.quant_snapshot_task(),
+        }
+        if task_names:
+            unknown = [name for name in task_names if name not in task_map]
+            if unknown:
+                raise ValueError(f"Unknown task names: {', '.join(unknown)}")
+            selected_tasks = [task_map[name] for name in task_names]
+        else:
+            selected_tasks = list(task_map.values())
+
+        selected_names = set(task_names or task_map.keys())
+        agents = []
+        if "research" in selected_names:
+            agents.append(self.researcher())
+        if "quant" in selected_names:
+            agents.append(self.quant())
+
         return Crew(
-            agents=self.agents,
-            tasks=self.tasks,
+            agents=agents,
+            tasks=selected_tasks,
             process=Process.sequential,
             verbose=True,
         )
+
+    @crew
+    def crew(self) -> Crew:
+        """Creates the Finance Insight crew."""
+        return self.build_crew()
 
 
 def _build_search_tool():

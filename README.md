@@ -3,7 +3,10 @@
 ## Overview
 Finance Insight Service uses a plan -> execute -> audit -> repair cycle to deliver finance news, a market snapshot, and bounded scenarios. It prioritizes accuracy over speed and avoids "LLM does math" errors by routing all calculations through a sandboxed Python execution tool.
 
-Note: Copy `.env.example` to `.env` and add `OPENAI_API_KEY` plus either `SERPER_API_KEY` or `SERPAPI_API_KEY`.
+Note: Copy `.env.example` to `.env` and add `OPENAI_API_KEY` plus either `SERPER_API_KEY` or `SERPAPI_API_KEY`. Optionally add `TWELVE_DATA_API_KEY` (falls back to Stooq when missing).
+
+Limitation: Some sources (for example, Reuters or Bloomberg) may block scraping due to JavaScript or bot protection, so results may fall back to headlines/snippets.
+Improvement: Add a JS-capable scraper or a paid content API to increase full-text coverage.
 
 ## Goals and constraints
 - Deliver finance news + stock brief + bounded scenarios + non-personalized "watch/monitor/avoid" outputs.
@@ -43,14 +46,15 @@ Tools (2):
 
 ### 3) Quant Agent (market data + indicators + scenarios via Python)
 Responsibilities:
-- Fetch OHLCV time series.
+- Decide which computations are needed based on the request (not all metrics by default).
+- Use provided data when supplied; fetch market data only when needed.
 - Compute indicators deterministically (returns, volatility, RSI, MAs, drawdown, etc.).
-- Generate bounded scenarios (base/bull/bear) from computed stats and explicit assumptions.
+- Generate bounded scenarios (base/bull/bear) when the request calls for them.
 
 Tools (2):
 - market_data_fetch (custom tool with provider fallback)
   - Provider order (recommended): Twelve Data -> Stooq else skip.
-- safe_python_exec (custom tool): executes agent-written Python, returns either SUCCESS with final_output or CODE ERROR for self-repair.
+- safe_python_exec (custom tool): executes small, calculator-style Python scripts with numpy/pandas allowed; returns SUCCESS with final_output or CODE ERROR for self-repair.
 
 ### 4) Auditor (logic + compliance gate)
 Responsibilities:
@@ -76,6 +80,7 @@ Tools (3):
 - Planner parses input and decides required modules.
 - Research searches and scrapes 1 to 3 key sources; outputs drivers + citations.
 - Quant fetches price series (with provider fallback), computes indicators/scenarios via safe_python_exec.
+- Quant can also operate on planner-provided data without fetching market data.
 - Auditor checks sanity, recency, citations, and compliance.
 - If REJECTED: Planner re-runs only the required portion (e.g., re-fetch data, re-compute RSI, fetch more recent news) and re-audits (bounded retries).
 - If APPROVED: Planner synthesizes the final brief.

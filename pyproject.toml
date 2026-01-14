@@ -7,12 +7,15 @@ requires-python = ">=3.10"
 dependencies = [
   "crewai[tools]>=0.83.0",
   "crewai-tools>=0.28.0",
+  "numpy>=1.26.4",
+  "pandas>=2.2.2",
   "python-dotenv>=1.0.1",
   "serpapi>=0.1.5",
 ]
 
 [project.scripts]
 research_agent = "finance_insight_service.main:main"
+quant_agent = "finance_insight_service.quant_main:main"
 
 [tool.uv]
 package = true

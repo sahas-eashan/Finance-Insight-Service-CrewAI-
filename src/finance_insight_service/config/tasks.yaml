@@ -1,6 +1,7 @@
 research_news_task:
   description: >
     You are given a research request:
+    User request: {user_request}
     Query: {query}
     Tickers: {tickers}
     Sites (optional): {sites}
@@ -30,6 +31,10 @@ research_news_task:
     - Do not invent facts, dates, or citations.
     - If a URL cannot be accessed or lacks a publish time, note that in limitations.
     - Use only the sources you retrieved in this run.
+    - If the user request involves predictions, ratios, or valuation metrics,
+      extract formulas and variable definitions into metrics_formulas for
+      internal use; do not surface formulas in the final response unless
+      the user requests them or they are directly explanatory.
   expected_output: >
     Return strict JSON with these keys:
     - drivers: list of 2 to 4 objects with fields:
@@ -41,6 +46,11 @@ research_news_task:
       - headline
       - published_at
       - key_points (list of strings)
+    - metrics_formulas: list of objects with fields:
+      - metric
+      - formula
+      - variables
+      - citation_url
     - limitations: list of strings (empty if none)
 
 quant_snapshot_task:
@@ -105,3 +115,83 @@ quant_snapshot_task:
     - scenarios: optional object with base, bull, bear each containing price_target,
       range_low, range_high, and assumptions
     - limitations: list of strings (empty if none)
+
+planner_task:
+  description: >
+    You are the Planner and Report Synthesizer. Inputs:
+    User request: {user_request}
+    Conversation summary (optional): {conversation_summary}
+    Runtime defaults (optional): {runtime_defaults}
+    Research output (optional): {research_output}
+    Quant output (optional): {quant_output}
+    Audit output (optional): {audit_output}
+    Sources requested by user (optional): {sources_requested}
+
+    Decide which modules are needed based on the request. Keep the plan minimal.
+    If audit_output is REJECTED, specify only the failed parts to rerun.
+    If required outputs are already present and approved, produce the final response.
+    If you use research_output or quant_output, set use_audit to true.
+    For predictive requests, plan to use Research to gather relevant ratios,
+    formulas, and contextual drivers, and use Quant to fetch market data and
+    compute those ratios via the Python calculator. Use longer time horizons
+    where reasonable and frame outputs as scenario-based, not guaranteed.
+    If research_output contains metrics_formulas, pass them into quant_request
+    as part of the request or provided_data so the Quant agent can compute them.
+    If multiple symbols are requested, generate a plan that runs quant per symbol
+    (one per request), or pick a single symbol and note the limitation.
+
+    Final response rules:
+    - Do not include citations by default.
+    - If sources are requested, include them.
+    - Do not invent facts or numbers.
+    - Only mention failed items in limitations; do not restate corrected failures.
+    - Do not output JSON in final_response; write human-readable text only.
+    - Only use numbers that appear in quant_output.
+    - If research_output is missing, avoid news claims and state limitations.
+    - Do not include formulas/variable definitions unless the user requests
+      them or they are directly explanatory for the prediction.
+
+    Formatting (human readable, concise):
+    - Use short section headers.
+    - Prefer bullets over long paragraphs.
+    - Recommended sections (include only what is available):
+      - Summary
+      - Snapshot (numbers)
+      - Scenarios (if computed)
+      - Stance (watch/monitor/avoid) + risks
+      - Limitations
+  expected_output: >
+    Return strict JSON with these keys:
+    - plan: object with use_research, use_quant, use_audit, rationale
+    - research_request: optional object with query, tickers, sites, days, max_articles
+    - quant_request: optional object with request, symbol, provided_data
+    - final_response: optional string
+    - notes: list of strings
+
+audit_task:
+  description: >
+    You are the Auditor. Inputs:
+    User request: {user_request}
+    Research output (optional): {research_output}
+    Quant output (optional): {quant_output}
+    Draft response (optional): {draft_response}
+
+    Validate:
+    - Numeric sanity (ranges, signs, missing fields).
+    - Evidence exists in research_output for factual claims.
+    - Narrative is consistent with numbers.
+    - Output is complete for the request.
+    - Compliance: no personalized advice or guaranteed returns.
+    - If the request is predictive, ensure assumptions are provided and that
+      any formulas needed exist in research_output (metrics_formulas) or are
+      otherwise documented for internal use. Only surface formulas to the user
+      when requested or directly explanatory.
+
+    If anything fails, return REJECTED with precise fix actions.
+  expected_output: >
+    Return strict JSON with these keys:
+    - audit_status: APPROVED | REJECTED | PARTIAL
+    - issues: list of objects with category, problem, fix_action
+    - approved_modules: list of strings
+    - required_reruns: list of strings (values: research, quant, planner)
+    - notes: list of strings

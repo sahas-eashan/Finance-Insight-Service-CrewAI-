@@ -34,6 +34,22 @@ class FinanceInsightCrew:
             allow_delegation=False,
         )
 
+    @agent
+    def planner(self) -> Agent:
+        return Agent(
+            config=self.agents_config["planner"],
+            verbose=True,
+            allow_delegation=False,
+        )
+
+    @agent
+    def auditor(self) -> Agent:
+        return Agent(
+            config=self.agents_config["auditor"],
+            verbose=True,
+            allow_delegation=False,
+        )
+
     @task
     def research_news_task(self) -> Task:
         return Task(
@@ -48,10 +64,26 @@ class FinanceInsightCrew:
             agent=self.quant(),
         )
 
+    @task
+    def planner_task(self) -> Task:
+        return Task(
+            config=self.tasks_config["planner_task"],
+            agent=self.planner(),
+        )
+
+    @task
+    def audit_task(self) -> Task:
+        return Task(
+            config=self.tasks_config["audit_task"],
+            agent=self.auditor(),
+        )
+
     def build_crew(self, task_names: list[str] | None = None) -> Crew:
         task_map = {
+            "planner": self.planner_task(),
             "research": self.research_news_task(),
             "quant": self.quant_snapshot_task(),
+            "audit": self.audit_task(),
         }
         if task_names:
             unknown = [name for name in task_names if name not in task_map]
@@ -63,10 +95,14 @@ class FinanceInsightCrew:
 
         selected_names = set(task_names or task_map.keys())
         agents = []
+        if "planner" in selected_names:
+            agents.append(self.planner())
         if "research" in selected_names:
             agents.append(self.researcher())
         if "quant" in selected_names:
             agents.append(self.quant())
+        if "audit" in selected_names:
+            agents.append(self.auditor())
 
         return Crew(
             agents=agents,

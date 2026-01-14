@@ -16,6 +16,7 @@ dependencies = [
 [project.scripts]
 research_agent = "finance_insight_service.main:main"
 quant_agent = "finance_insight_service.quant_main:main"
+finance_insight = "finance_insight_service.full_main:main"
 
 [tool.uv]
 package = true

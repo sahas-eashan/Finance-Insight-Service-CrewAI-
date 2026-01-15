@@ -3,7 +3,7 @@
 ## Overview
 Finance Insight Service uses a plan -> execute -> audit -> repair cycle to deliver finance news, a market snapshot, and bounded scenarios. It prioritizes accuracy over speed and avoids "LLM does math" errors by routing all calculations through a sandboxed Python execution tool.
 
-Note: Copy `.env.example` to `.env` and add `OPENAI_API_KEY` plus either `SERPER_API_KEY` or `SERPAPI_API_KEY`. Optionally add `TWELVE_DATA_API_KEY` (falls back to Stooq when missing).
+Note: Copy `.env.example` to `.env` and add `OPENAI_API_KEY` plus either `SERPER_API_KEY` or `SERPAPI_API_KEY`. Optionally add `TWELVE_DATA_API_KEY` (falls back to Stooq when missing) and `ALPHAVANTAGE_API_KEY` for fundamentals/ratios.
 
 Limitation: Some sources (for example, Reuters or Bloomberg) may block scraping due to JavaScript or bot protection, so results may fall back to headlines/snippets.
 Improvement: Add a JS-capable scraper or a paid content API to increase full-text coverage.
@@ -51,9 +51,11 @@ Responsibilities:
 - Compute indicators deterministically (returns, volatility, RSI, MAs, drawdown, etc.).
 - Generate bounded scenarios (base/bull/bear) when the request calls for them.
 
-Tools (2):
+Tools (3):
 - market_data_fetch (custom tool with provider fallback)
   - Provider order (recommended): Twelve Data -> Stooq else skip.
+- fundamentals_fetch (custom tool)
+  - Provider: Alpha Vantage (requires `ALPHAVANTAGE_API_KEY`, free tier is rate-limited).
 - safe_python_exec (custom tool): executes small, calculator-style Python scripts with numpy/pandas allowed; returns SUCCESS with final_output or CODE ERROR for self-repair.
 
 ### 4) Auditor (logic + compliance gate)

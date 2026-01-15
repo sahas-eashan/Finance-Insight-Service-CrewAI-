@@ -35,6 +35,11 @@ research_news_task:
       extract formulas and variable definitions into metrics_formulas for
       internal use; do not surface formulas in the final response unless
       the user requests them or they are directly explanatory.
+    - If planner output is present in context and plan.use_research is false,
+      do not call tools; return empty drivers/articles/metrics_formulas with a
+      limitation noting the task was skipped by plan.
+    - If planner output includes a research_request object, prefer its
+      query/tickers/sites/days/max_articles over the default inputs.
   expected_output: >
     Return strict JSON with these keys:
     - drivers: list of 2 to 4 objects with fields:
@@ -66,14 +71,38 @@ quant_snapshot_task:
     Decide which computations are needed based on the Request. Do not compute
     everything by default.
 
+    If planner output is present in context and plan.use_quant is false,
+    do not call tools; return a minimal snapshot with a limitation noting the
+    task was skipped by plan.
+    If planner output includes a quant_request object, prefer its symbol,
+    interval, outputsize, horizon_days, request, and provided_data over the
+    default inputs.
+
     If provided_data is supplied, use it and do not call market_data_fetch unless
     the Request explicitly asks for fresh market data.
     If provided_data is not supplied and market data is needed, use market_data_fetch.
+    If the Request needs fundamentals or ratios (ROE, margins, FCF, D/E, P/E, P/B),
+    use fundamentals_fetch unless provided_data already includes those metrics.
+    fundamentals_fetch returns overview plus income/balance/cashflow reports; extract
+    ratio fields from overview and compute others from the statements as needed.
 
     Use safe_python_exec as a calculator. Prefer small, single-purpose scripts.
     Each call should accept simplified input data, compute one logical step,
     and print a single JSON object to stdout. Allowed modules: math, statistics,
     datetime, time, json, numpy, pandas.
+    Always call safe_python_exec with both code and simplified data.
+    If you need to inspect data, do it outside the safe_python_exec.
+    If multiple symbols are mentioned, handle one symbol per call; if only one
+    quant task is available, pick the first symbol and note the limitation.
+    Do not pass a multi-symbol dict into a single safe_python_exec call.
+    Prefer simplified inputs: extract only the needed arrays/dicts from any
+    tool output before calling safe_python_exec (for example, pass a list of
+    closes or a list of OHLCV dicts, not the full provider wrapper).
+    Always pass data_json as a list of row dicts or a dict of lists. Do not
+    pass the full provider wrapper; extract provider_output["data"] first.
+    If you only have a single row dict, wrap it in a list.
+    Never pass data_json as a JSON string. Only use json.loads if you
+    explicitly passed a JSON string.
 
     If safe_python_exec returns CODE_ERROR, fix the code and retry. Do not proceed
     until you get SUCCESS or you have retried 3 times, then return the error in
@@ -83,10 +112,13 @@ quant_snapshot_task:
     - No leading indentation at top-level lines.
     - Use 4 spaces for indents inside blocks only.
     - Do not include code fences or markdown in the code string.
+    - Always include `import json` when printing results.
+    - Always end with print(json.dumps(result, ensure_ascii=True)).
     - Prefer single-line expressions over multi-line blocks where possible.
     - When parsing dates, use pandas to_datetime with errors="coerce" and format="mixed".
     - Normalize input data before building the DataFrame:
       - If data is a JSON string, parse it with json.loads.
+      - If data is already a dict or list, use it directly; do not call json.loads.
       - If data is a dict with a "data" key, use data["data"] as records.
       - If data is a list, use it directly as records.
       - If records are strings, parse each element with json.loads.
@@ -118,38 +150,158 @@ quant_snapshot_task:
 
 planner_task:
   description: >
-    You are the Planner and Report Synthesizer. Inputs:
+    You are the Planner. Inputs:
     User request: {user_request}
     Conversation summary (optional): {conversation_summary}
     Runtime defaults (optional): {runtime_defaults}
-    Research output (optional): {research_output}
-    Quant output (optional): {quant_output}
-    Audit output (optional): {audit_output}
     Sources requested by user (optional): {sources_requested}
 
-    Decide which modules are needed based on the request. Keep the plan minimal.
-    If audit_output is REJECTED, specify only the failed parts to rerun.
-    If required outputs are already present and approved, produce the final response.
-    If you use research_output or quant_output, set use_audit to true.
+    Produce a plan and task requests only. Do not draft the final response here.
+    Decide which modules are needed based on the request. Keep the plan well organized
+    and concise.
+    If you plan to use Research or Quant, set use_audit to true.
     For predictive requests, plan to use Research to gather relevant ratios,
     formulas, and contextual drivers, and use Quant to fetch market data and
-    compute those ratios via the Python calculator. Use longer time horizons
-    where reasonable and frame outputs as scenario-based, not guaranteed.
+    fundamentals (fundamentals_fetch) to compute those ratios via the Python
+    calculator. Use longer time horizons where reasonable and frame outputs as
+    scenario-based, not guaranteed.
+    If fundamental data is unavailable, prefer price-based scenarios and
+    explicitly note limitations; do not require advanced ML models.
     If research_output contains metrics_formulas, pass them into quant_request
     as part of the request or provided_data so the Quant agent can compute them.
     If multiple symbols are requested, generate a plan that runs quant per symbol
     (one per request), or pick a single symbol and note the limitation.
+    For research scope, focus on relevance/citations/formulas; for quant scope,
+    focus on numeric sanity and required metrics.
+  expected_output: >
+    Return strict JSON with these keys:
+    - plan: object with use_research, use_quant, use_audit, rationale
+    - research_request: optional object with query, tickers, sites, days, max_articles
+    - quant_request: optional object with request, symbol, provided_data
+    - notes: list of strings
+
+    JSON output rules (strict):
+    - Output valid JSON only (no code, no comments, no trailing commas).
+    - Do not use code expressions like .join(...). If you need newlines, use a
+      JSON list of strings or include "\\n" in a string.
+    - If provided_data includes metrics_formulas, pass it as a JSON list or object.
+    - quant_request.symbol must be set unless provided_data already contains all
+      numeric inputs required by the quant computation.
+
+audit_task:
+  description: >
+    You are the Auditor.
+    User request: {user_request}
+    Use the Planner/Research/Quant/Draft outputs available in context.
+
+    Infer scope from the task name or context. Validate only what the scope covers:
+    - research: citations, timestamps, relevance, metrics_formulas extraction.
+    - quant: numeric sanity, required metrics, scenario assumptions if requested.
+    - final: alignment between research + quant + draft; compliance/limitations.
+    Do not require unrelated modules. If something fails, return REJECTED with
+    precise fix actions.
+  expected_output: >
+    Return strict JSON with these keys:
+    - audit_status: APPROVED | REJECTED | PARTIAL
+    - issues: list of objects with category, problem, fix_action
+    - approved_modules: list of strings
+    - required_reruns: list of strings (values: research, quant, planner)
+    - notes: list of strings
+
+audit_research_task:
+  description: >
+    You are the Auditor. Scope: research.
+    User request: {user_request}
+    Use Planner output and Research output from context. Ignore quant outputs.
+    Validate citations, timestamps, relevance, and metrics_formulas extraction
+    when ratios are needed. Do not require numeric metrics or a final answer.
+    Only request research reruns if needed.
+    If research_output is empty because the plan skipped research, return PARTIAL
+    with a note that the research audit was skipped by plan.
+  expected_output: >
+    Return strict JSON with these keys:
+    - audit_status: APPROVED | REJECTED | PARTIAL
+    - issues: list of objects with category, problem, fix_action
+    - approved_modules: list of strings
+    - required_reruns: list of strings (values: research, quant, planner)
+    - notes: list of strings
+
+audit_quant_task:
+  description: >
+    You are the Auditor. Scope: quant.
+    User request: {user_request}
+    Use Planner output and Quant output from context. Ignore research outputs
+    unless the quant request depends on research-provided formulas.
+    Validate numeric sanity, required metrics, and scenario assumptions if requested.
+    Do not require citations or news evidence. Only request quant reruns if needed.
+    If quant_output is empty because the plan skipped quant, return PARTIAL with
+    a note that the quant audit was skipped by plan.
+  expected_output: >
+    Return strict JSON with these keys:
+    - audit_status: APPROVED | REJECTED | PARTIAL
+    - issues: list of objects with category, problem, fix_action
+    - approved_modules: list of strings
+    - required_reruns: list of strings (values: research, quant, planner)
+    - notes: list of strings
+
+audit_final_task:
+  description: >
+    You are the Auditor. Scope: final.
+    User request: {user_request}
+    Use Planner, Research, Quant, and Draft outputs from context.
+    Validate alignment, completeness for the request, and compliance
+    (no personalized advice, no guaranteed returns).
+    Require reruns only for missing or failed modules.
+  expected_output: >
+    Return strict JSON with these keys:
+    - audit_status: APPROVED | REJECTED | PARTIAL
+    - issues: list of objects with category, problem, fix_action
+    - approved_modules: list of strings
+    - required_reruns: list of strings (values: research, quant, planner)
+    - notes: list of strings
+
+final_draft_task:
+  description: >
+    You are the final report drafter. Inputs:
+    User request: {user_request}
+    Conversation summary (optional): {conversation_summary}
+    Runtime defaults (optional): {runtime_defaults}
+    Sources requested by user (optional): {sources_requested}
+    Planner output (in context), Research output (in context),
+    Quant output (in context), Audit output(s) (in context).
+
+    Draft a response for audit based on available outputs. Keep it concise and
+    aligned with the request. Do not include citations by default. Only use
+    numbers present in quant output.
+  expected_output: >
+    Return strict JSON with these keys:
+    - draft_response: string
+    - notes: list of strings
+
+final_report_task:
+  description: >
+    You are the final report synthesizer. Inputs:
+    User request: {user_request}
+    Conversation summary (optional): {conversation_summary}
+    Runtime defaults (optional): {runtime_defaults}
+    Sources requested by user (optional): {sources_requested}
+    Planner output (in context), Research output (in context),
+    Quant output (in context), Audit output(s) (in context),
+    Draft response (in context).
+
+    Use the latest available outputs from context to produce the final response.
+    If the latest audit_output is REJECTED, do not present results as approved;
+    surface the issues and required fixes in Limitations instead.
 
     Final response rules:
     - Do not include citations by default.
     - If sources are requested, include them.
     - Do not invent facts or numbers.
-    - Only mention failed items in limitations; do not restate corrected failures.
-    - Do not output JSON in final_response; write human-readable text only.
     - Only use numbers that appear in quant_output.
     - If research_output is missing, avoid news claims and state limitations.
     - Do not include formulas/variable definitions unless the user requests
       them or they are directly explanatory for the prediction.
+    - Only mention failed items in limitations; do not restate corrected failures.
 
     Formatting (human readable, concise):
     - Use short section headers.
@@ -162,36 +314,5 @@ planner_task:
       - Limitations
   expected_output: >
     Return strict JSON with these keys:
-    - plan: object with use_research, use_quant, use_audit, rationale
-    - research_request: optional object with query, tickers, sites, days, max_articles
-    - quant_request: optional object with request, symbol, provided_data
-    - final_response: optional string
-    - notes: list of strings
-
-audit_task:
-  description: >
-    You are the Auditor. Inputs:
-    User request: {user_request}
-    Research output (optional): {research_output}
-    Quant output (optional): {quant_output}
-    Draft response (optional): {draft_response}
-
-    Validate:
-    - Numeric sanity (ranges, signs, missing fields).
-    - Evidence exists in research_output for factual claims.
-    - Narrative is consistent with numbers.
-    - Output is complete for the request.
-    - Compliance: no personalized advice or guaranteed returns.
-    - If the request is predictive, ensure assumptions are provided and that
-      any formulas needed exist in research_output (metrics_formulas) or are
-      otherwise documented for internal use. Only surface formulas to the user
-      when requested or directly explanatory.
-
-    If anything fails, return REJECTED with precise fix actions.
-  expected_output: >
-    Return strict JSON with these keys:
-    - audit_status: APPROVED | REJECTED | PARTIAL
-    - issues: list of objects with category, problem, fix_action
-    - approved_modules: list of strings
-    - required_reruns: list of strings (values: research, quant, planner)
+    - final_response: string
     - notes: list of strings

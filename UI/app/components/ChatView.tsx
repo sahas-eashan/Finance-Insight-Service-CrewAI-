@@ -16,6 +16,19 @@ type TraceEvent = {
 };
 
 function TraceViewer({ events }: { events: TraceEvent[] }) {
+  if (!events || events.length === 0) {
+    return (
+      <div className="trace-viewer" onClick={(e) => e.stopPropagation()}>
+        <div className="trace-header">🔍 Agent Execution Trace</div>
+        <div className="trace-section">
+          <div className="trace-content">
+            <div className="trace-title">No trace events captured yet...</div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+  
   return (
     <div className="trace-viewer" onClick={(e) => e.stopPropagation()}>
       <div className="trace-header">🔍 Agent Execution Trace</div>
@@ -273,9 +286,7 @@ export default function ChatView() {
   };
 
   const handleTraceToggle = () => {
-    if (!currentTraces.length) {
-      return;
-    }
+    console.log('Trace toggle clicked. Traces:', currentTraces.length, 'Current show:', showTrace);
     setShowTrace((prev) => !prev);
   };
 
@@ -305,9 +316,8 @@ export default function ChatView() {
                   <button
                     type="button"
                     onClick={handleTraceToggle}
-                    style={{ background: "none", border: "none", padding: 0, margin: 0, color: "inherit", cursor: currentTraces.length ? "pointer" : "default" }}
+                    style={{ background: "none", border: "none", padding: 0, margin: 0, color: "inherit", cursor: "pointer", textDecoration: showTrace ? "underline" : "none" }}
                     aria-label="Show trace"
-                    disabled={!currentTraces.length}
                   >
                     Thinking...
                   </button>

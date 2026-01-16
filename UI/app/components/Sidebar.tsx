@@ -12,7 +12,6 @@ const primaryItems: {
   href: string;
 }[] = [
   { label: "New session", icon: "compose", href: "/?new=1" },
-  { label: "History", icon: "search", href: "/history" },
 ];
 
 export default function Sidebar() {

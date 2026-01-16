@@ -117,10 +117,10 @@ a {
   width: 260px;
   background: var(--sidebar-bg);
   border-right: 1px solid var(--sidebar-border);
-  padding: 18px 14px 20px;
+  padding: 14px 14px 14px;
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: 12px;
   height: 100vh;
   overflow: hidden;
 }
@@ -149,8 +149,9 @@ a {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  max-height: 400px;
+  flex: 1;
   overflow-y: auto;
+  min-height: 0;
 }
 
 .sidebar-thread {
@@ -186,6 +187,15 @@ a {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  flex-shrink: 0;
+}
+
+.sidebar-section {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
 .sidebar-label {
@@ -355,12 +365,16 @@ a {
 }
 
 .sidebar-footer {
-  margin-top: auto;
+  margin-top: 0;
+  padding: 12px;
+  flex-shrink: 0;
+  border-top: 1px solid var(--sidebar-border);
 }
 
 .sidebar-item--footer {
   border: 1px solid var(--pill-border);
   background: var(--surface);
+  width: 100%;
 }
 
 .chat-main {
@@ -508,7 +522,8 @@ a {
 }
 
 .chat-view {
-  width: min(602px, 100%);
+  width: 100%;
+  max-width: 100%;
   display: flex;
   flex-direction: column;
   gap: 20px;
@@ -754,6 +769,16 @@ a {
   text-align: center;
 }
 
+.empty-state-prompt {
+  font-size: 15px;
+  color: var(--text-muted);
+  margin-top: 12px;
+  text-align: center;
+  font-style: italic;
+  animation: fadeIn 0.5s ease-in;
+  min-height: 24px;
+}
+
 .composer {
   width: 100%;
   display: flex;
@@ -761,7 +786,8 @@ a {
 }
 
 .composer-card {
-  width: min(480px, 100%);
+  width: 100%;
+  max-width: 900px;
   background: var(--composer-bg);
   border: 1px solid var(--composer-border);
   border-radius: 18px;
@@ -771,15 +797,7 @@ a {
   flex-direction: column;
   gap: 12px;
   position: relative;
-  transition: width 420ms cubic-bezier(0.34, 1.56, 0.64, 1),
-    border-color 200ms ease, box-shadow 200ms ease;
-  transform-origin: center;
-  will-change: width, transform;
-}
-
-.composer-card.is-expanded {
-  width: 100%;
-  animation: composer-elastic 520ms ease;
+  transition: border-color 200ms ease, box-shadow 200ms ease;
 }
 
 .composer-input {
@@ -792,11 +810,6 @@ a {
   resize: none;
   outline: none;
   min-height: 22px;
-  transition: min-height 420ms cubic-bezier(0.34, 1.56, 0.64, 1);
-}
-
-.is-expanded .composer-input {
-  min-height: 72px;
 }
 
 .composer-input::placeholder {

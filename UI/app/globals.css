@@ -125,6 +125,62 @@ a {
   overflow: hidden;
 }
 
+.sidebar-header {
+  padding: 8px 12px;
+  margin-bottom: 4px;
+}
+
+.sidebar-brand {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--accent);
+  margin: 0;
+}
+
+.sidebar-subtitle {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin: 2px 0 0 0;
+  font-weight: 500;
+  letter-spacing: 0.3px;
+}
+
+.sidebar-threads {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.sidebar-thread {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  text-decoration: none;
+  color: var(--text-secondary);
+  font-size: 13px;
+  transition: background 150ms ease;
+}
+
+.sidebar-thread:hover {
+  background: var(--hover-bg);
+}
+
+.thread-icon {
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.thread-title {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .sidebar-group,
 .sidebar-section {
   display: flex;
@@ -426,6 +482,28 @@ a {
   padding: 24px 0 20px;
   min-height: 0;
   overflow: hidden;
+  position: relative;
+}
+
+.chat-content::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 600px;
+  height: 600px;
+  background-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"><text x="50%" y="50%" font-family="Arial,sans-serif" font-size="48" font-weight="bold" fill="%23f47b20" text-anchor="middle" dominant-baseline="middle">WSO2</text></svg>');
+  background-size: contain;
+  background-repeat: no-repeat;
+  background-position: center;
+  opacity: 0.04;
+  pointer-events: none;
+  z-index: 0;
+}
+
+:root[data-theme="dark"] .chat-content::before {
+  opacity: 0.06;
 }
 
 .chat-view {
@@ -435,6 +513,7 @@ a {
   gap: 20px;
   height: 100%;
   position: relative;
+  z-index: 1;
 }
 
 .chat-view--has-messages {
@@ -484,6 +563,167 @@ a {
 
 .message--pending {
   opacity: 0.7;
+  transition: opacity 200ms ease;
+}
+
+.message--pending:hover {
+  opacity: 1;
+  cursor: pointer;
+}
+
+.trace-viewer {
+  margin-top: 12px;
+  padding: 16px;
+  background: var(--surface);
+  border-radius: 12px;
+  border: 1px solid var(--composer-border);
+  max-height: 500px;
+  overflow-y: auto;
+  cursor: default;
+}
+
+.trace-header {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent-cool);
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 2px solid var(--accent-cool);
+  text-align: center;
+}
+
+.trace-section {
+  display: flex;
+  gap: 12px;
+  padding: 12px;
+  margin-bottom: 8px;
+  border-radius: 8px;
+  background: var(--pill-bg);
+  border-left: 3px solid var(--pill-border);
+}
+
+.trace-task-start {
+  border-left-color: var(--accent-cool);
+  background: var(--accent-cool-soft);
+}
+
+.trace-task-complete {
+  border-left-color: #2f9e44;
+  background: rgba(47, 158, 68, 0.1);
+}
+
+.trace-tool {
+  border-left-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.trace-tool-done {
+  border-left-color: #868e96;
+  background: rgba(134, 142, 150, 0.1);
+}
+
+.trace-crew {
+  border-left-color: #7c3aed;
+  background: rgba(124, 58, 237, 0.1);
+}
+
+.trace-crew-done {
+  border-left-color: #16a34a;
+  background: rgba(22, 163, 74, 0.1);
+}
+
+.trace-icon {
+  font-size: 18px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.trace-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.trace-title {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.trace-agent {
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-style: italic;
+}
+
+.trace-detail {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.trace-output {
+  margin-top: 8px;
+  padding: 8px;
+  background: var(--input-bg);
+  border-radius: 6px;
+  border: 1px solid var(--input-border);
+}
+
+.trace-output summary {
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--accent-cool);
+  font-weight: 600;
+  user-select: none;
+}
+
+.trace-output summary:hover {
+  color: var(--accent);
+}
+
+.trace-output pre {
+  margin-top: 8px;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  font-family: 'Courier New', monospace;
+}
+
+.trace-event {
+  padding: 8px;
+  margin-bottom: 8px;
+  border-left: 3px solid var(--accent-cool);
+  background: var(--pill-bg);
+  border-radius: 6px;
+  font-size: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.trace-event:last-child {
+  margin-bottom: 0;
+}
+
+.trace-type {
+  font-weight: 600;
+  color: var(--accent-cool);
+  text-transform: uppercase;
+  font-size: 10px;
+  letter-spacing: 0.5px;
+}
+
+.trace-summary {
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.trace-detail {
+  color: var(--text-muted);
+  font-size: 11px;
 }
 
 .message-meta {
@@ -829,8 +1069,35 @@ a {
   padding: 40px 0 80px;
 }
 
+.settings-backdrop {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  justify-content: flex-end;
+  align-items: flex-start;
+  overflow-y: auto;
+  padding: 40px 80px 40px 20px;
+  z-index: 100;
+}
+
+.settings-container {
+  width: min(900px, 100%);
+  max-height: calc(100vh - 80px);
+  overflow-y: auto;
+  scrollbar-width: none; /* Firefox */
+  -ms-overflow-style: none; /* IE/Edge */
+}
+
+.settings-container::-webkit-scrollbar {
+  display: none; /* Chrome/Safari/Opera */
+}
+
 .settings-card {
-  width: min(700px, 100%);
+  width: 100%;
   background: var(--surface);
   border: 1px solid var(--composer-border);
   border-radius: 18px;
@@ -940,6 +1207,22 @@ a {
   padding: 2px 6px;
   border-radius: 6px;
   border: 1px solid var(--pill-border);
+}
+
+.back-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  fontSize: 14px;
+  color: var(--text-secondary);
+  text-decoration: none;
+  padding: 6px 12px;
+  border-radius: 8px;
+  transition: background 200ms ease;
+}
+
+.back-link:hover {
+  background: var(--hover-bg);
 }
 
 @media (max-width: 1024px) {

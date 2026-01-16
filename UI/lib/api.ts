@@ -16,6 +16,31 @@ export type ChatResponse = {
   reply?: string;
   messages?: ChatMessage[];
   threadId?: string;
+  traces?: any[];
+};
+
+export type Thread = {
+  id: string;
+  title: string;
+  summary?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ServiceCapabilities = {
+  services: {
+    openai: boolean;
+    serper: boolean;
+    serpapi: boolean;
+    twelveData: boolean;
+    alphaVantage: boolean;
+  };
+  capabilities: {
+    news_search: boolean | string;
+    market_data: boolean | string;
+    fundamentals: boolean;
+    ai_agents: boolean;
+  };
 };
 
 const STORAGE_KEY = "agentSettings";
@@ -92,9 +117,10 @@ export const setApiConfig = (config: ApiConfig) => {
   window.localStorage.setItem(STORAGE_KEY, JSON.stringify(config));
 };
 
-export const fetchHistory = async (): Promise<ChatMessage[]> => {
+export const fetchHistory = async (threadId?: string): Promise<ChatMessage[]> => {
   const { baseUrl, apiKey } = getApiConfig();
-  const response = await fetch(`${baseUrl}/history`, {
+  const url = threadId ? `${baseUrl}/history?threadId=${threadId}` : `${baseUrl}/history`;
+  const response = await fetch(url, {
     headers: buildHeaders(apiKey),
     cache: "no-store",
   });
@@ -164,5 +190,53 @@ export const testConnection = async (config?: ApiConfig): Promise<boolean> => {
     return response.ok;
   } catch {
     return false;
+  }
+};
+
+export const fetchTrace = async (threadId: string): Promise<any[]> => {
+  const { baseUrl, apiKey } = getApiConfig();
+  const response = await fetch(`${baseUrl}/trace?threadId=${threadId}`, {
+    headers: buildHeaders(apiKey),
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    throw new Error("Failed to load trace");
+  }
+
+  const data = await response.json();
+  return Array.isArray(data) ? data : [];
+};
+
+export const fetchThreads = async (): Promise<Thread[]> => {
+  const { baseUrl, apiKey } = getApiConfig();
+  const response = await fetch(`${baseUrl}/threads`, {
+    headers: buildHeaders(apiKey),
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    throw new Error("Failed to load threads");
+  }
+
+  const data = await response.json();
+  return Array.isArray(data) ? data : [];
+};
+
+export const fetchConfig = async (): Promise<ServiceCapabilities | null> => {
+  try {
+    const { baseUrl, apiKey } = getApiConfig();
+    const response = await fetch(`${baseUrl}/config`, {
+      headers: buildHeaders(apiKey),
+    });
+
+    if (!response.ok) {
+      return null;
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error("Failed to fetch config:", error);
+    return null;
   }
 };

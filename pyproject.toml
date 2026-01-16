@@ -7,8 +7,13 @@ requires-python = ">=3.10"
 dependencies = [
   "crewai[tools]>=0.83.0",
   "crewai-tools>=0.28.0",
+  "faiss-cpu>=1.8.0",
+  "flask>=3.0.0",
+  "flask-cors>=4.0.0",
   "numpy>=1.26.4",
+  "openai>=1.40.0",
   "pandas>=2.2.2",
+  "pymongo>=4.6.0",
   "python-dotenv>=1.0.1",
   "serpapi>=0.1.5",
 ]
@@ -17,6 +22,7 @@ dependencies = [
 research_agent = "finance_insight_service.main:main"
 quant_agent = "finance_insight_service.quant_main:main"
 finance_insight = "finance_insight_service.full_main:main"
+finance_insight_api = "finance_insight_service.api_server:main"
 
 [tool.uv]
 package = true

@@ -17,6 +17,9 @@ research_news_task:
 
     For each article you choose, use ScrapeWebsiteTool to read the full content.
     If the search results include a source_url, prefer that; otherwise use the link.
+    If a URL times out or fails to load (connection error, bot protection, etc.),
+    note it in limitations and try other sources. Do not fail the entire task.
+    Aim to successfully scrape at least 2-3 sources from the search results.
 
     Extract for each article:
     - headline or title (if present)

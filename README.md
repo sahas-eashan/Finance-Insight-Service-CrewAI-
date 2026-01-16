@@ -3,7 +3,40 @@
 ## Overview
 Finance Insight Service uses a plan -> execute -> audit -> repair cycle to deliver finance news, a market snapshot, and bounded scenarios. It prioritizes accuracy over speed and avoids "LLM does math" errors by routing all calculations through a sandboxed Python execution tool.
 
-Note: Copy `.env.example` to `.env` and add `OPENAI_API_KEY` plus either `SERPER_API_KEY` or `SERPAPI_API_KEY`. Optionally add `TWELVE_DATA_API_KEY` (falls back to Stooq when missing) and `ALPHAVANTAGE_API_KEY` for fundamentals/ratios.
+## Quick Start
+
+### Prerequisites
+- Python 3.10+
+- Node.js 18+
+- MongoDB running locally
+- Required API keys (see Configuration below)
+
+### One-Command Start
+```bash
+./run.sh
+```
+
+This will start both:
+- **Backend API** on http://localhost:5000
+- **Frontend UI** on http://localhost:3000
+
+### Manual Start
+If you prefer to run them separately:
+
+**Backend:**
+```bash
+uv run finance_insight_api --host 0.0.0.0 --port 5000
+```
+
+**Frontend:**
+```bash
+cd UI
+npm run dev
+```
+
+## Configuration
+
+Copy `.env.example` to `.env` and add: `OPENAI_API_KEY` plus either `SERPER_API_KEY` or `SERPAPI_API_KEY`. Optionally add `TWELVE_DATA_API_KEY` (falls back to Stooq when missing) and `ALPHAVANTAGE_API_KEY` for fundamentals/ratios. For the Flask API, set `MONGO_URI`, `MONGO_DB`, and optional `API_KEY`.
 
 Limitation: Some sources (for example, Reuters or Bloomberg) may block scraping due to JavaScript or bot protection, so results may fall back to headlines/snippets.
 Improvement: Add a JS-capable scraper or a paid content API to increase full-text coverage.
@@ -87,3 +120,46 @@ Tools (3):
 - If REJECTED: Planner re-runs only the required portion (e.g., re-fetch data, re-compute RSI, fetch more recent news) and re-audits (bounded retries).
 - If APPROVED: Planner synthesizes the final brief.
 - If providers are unavailable: return news-only with explicit limitations.
+
+## Flask API (Mongo + FAISS)
+The UI expects a backend with these endpoints:
+- `GET /health` returns `{status:"ok"}`
+- `GET /history` returns a list of messages
+- `POST /chat` accepts `{message, threadId}` and returns `{reply, threadId}`
+- `GET /trace?threadId=...` returns human-readable trace events
+
+Run the API server:
+```bash
+uv run finance_insight_api --host 0.0.0.0 --port 5000
+```
+
+Or use the convenient startup script:
+```bash
+./run.sh
+```
+
+## UI Features
+
+The Next.js frontend includes:
+- **Real-time chat interface** for finance queries
+- **Trace viewer** - Click "View trace" while thinking to see agent execution steps
+- **Dark/light mode** toggle
+- **Conversation history** with semantic search
+- **Settings page** for API configuration
+
+### Why Separate Frontend/Backend?
+
+The frontend and backend are separate services because:
+
+1. **Technology Independence**: Backend uses Python/CrewAI for AI agents; frontend uses Next.js/React for modern UI
+2. **Scalability**: Can scale backend (compute-heavy) and frontend (serve static) independently
+3. **Development**: Teams can work on UI and AI logic separately
+4. **Deployment Flexibility**: 
+   - Backend can run on GPU servers
+   - Frontend can be deployed to CDN/edge networks
+5. **API-First Design**: Backend serves as an API for multiple clients (web, mobile, CLI)
+
+The `run.sh` script makes local development seamless by starting both together.
+
+Mongo stores threads/messages; FAISS stores semantic memory and is fed into
+`conversation_summary` for follow-ups.

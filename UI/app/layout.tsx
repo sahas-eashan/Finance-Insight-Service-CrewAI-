@@ -9,8 +9,8 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  title: "Sentinel AI",
-  description: "Custom AI agent chat interface",
+  title: "Finance Insight Service",
+  description: "AI-powered finance research and market analysis",
 };
 
 export default function RootLayout({

@@ -48,6 +48,62 @@ def _safe_json(value: Any) -> str:
         return json.dumps(str(value), ensure_ascii=True)
 
 
+def _simplify_trace(event: dict[str, Any]) -> str:
+    """Convert trace event to human-readable message."""
+    event_type = event.get("type")
+    
+    if event_type == "crew_started":
+        return "🚀 Starting analysis..."
+    
+    if event_type == "crew_completed":
+        return "🎉 Analysis complete!"
+    
+    if event_type == "task_started":
+        task = event.get("task", "task")
+        return f"📋 Working on: {task}"
+    
+    if event_type == "task_completed":
+        task = event.get("task", "task")
+        return f"✅ Completed: {task}"
+    
+    if event_type == "tool_started":
+        tool = event.get("tool", "")
+        args = event.get("args", {})
+        
+        if "search" in tool.lower() or "serp" in tool.lower():
+            query = args.get("query", args.get("search_query", ""))
+            if query:
+                return f"🔍 Searching the web for: {query[:60]}..."
+            return "🔍 Searching the web..."
+        
+        if "fundamentals" in tool.lower():
+            ticker = args.get("ticker", args.get("symbol", ""))
+            if ticker:
+                return f"📊 Analyzing fundamentals for {ticker}..."
+            return "📊 Fetching financial data..."
+        
+        if "market" in tool.lower() or "price" in tool.lower():
+            ticker = args.get("ticker", args.get("symbol", ""))
+            if ticker:
+                return f"📈 Getting market data for {ticker}..."
+            return "📈 Fetching market data..."
+        
+        return f"🔧 Using tool: {tool}"
+    
+    if event_type == "tool_completed":
+        tool = event.get("tool", "")
+        if "search" in tool.lower() or "serp" in tool.lower():
+            return "✓ Web search completed"
+        if "fundamentals" in tool.lower():
+            return "✓ Financial data retrieved"
+        if "market" in tool.lower():
+            return "✓ Market data retrieved"
+        return f"✓ Tool completed: {tool}"
+    
+    # Fallback
+    return event.get("summary", "Processing...")
+
+
 def _normalize_list(value: Any) -> list[str]:
     if value is None:
         return []
@@ -657,6 +713,7 @@ def create_app() -> Flask:
 
     @app.post("/chat")
     def chat():
+        """Stream chat response with real-time trace updates via SSE."""
         payload = request.get_json(force=True) or {}
         message = str(payload.get("message", "")).strip()
         if not message:
@@ -681,35 +738,146 @@ def create_app() -> Flask:
             for rel in related:
                 print(f"  - Score: {rel['score']:.3f} | {rel['content'][:80]}...")
 
-        inputs = _build_inputs(payload, conversation_summary)
-        with run_lock, crewai_event_bus.scoped_handlers():
-            traces, _ = _collect_traces()
-            crew = FinanceInsightCrew().build_crew()
-            result = crew.kickoff(inputs=inputs)
+        def generate_stream():
+            """Generate SSE stream with real-time trace updates."""
+            traces: list[dict[str, Any]] = []
+            lock = threading.Lock()
 
-        final_response, raw_output = _extract_final_response(result)
-        assistant_text = final_response or str(raw_output)
-        assistant_id = store.add_message(thread_id, "assistant", assistant_text, {})
-        memory.add_message_embedding(assistant_id, thread_id, assistant_text)
+            def emit_trace(entry: dict[str, Any]) -> None:
+                with lock:
+                    traces.append(entry)
+                    # Send simplified message immediately
+                    simple_msg = _simplify_trace(entry)
+                    event_data = json.dumps({
+                        "type": "trace",
+                        "message": simple_msg,
+                        "detail": {
+                            "type": entry.get("type"),
+                            "agent": entry.get("agent"),
+                            "task": entry.get("task"),
+                            "tool": entry.get("tool"),
+                        }
+                    })
+                    yield f"data: {event_data}\n\n"
 
-        # Return traces directly with response (ephemeral, not stored)
-        trace_payload = [
-            {
-                "type": event.get("type"),
-                "agent": event.get("agent"),
-                "task": event.get("task"),
-                "tool": event.get("tool"),
-                "output": event.get("output"),
-                "summary": event.get("summary"),
-            }
-            for event in traces
-        ]
+            @crewai_event_bus.on(CrewKickoffStartedEvent)
+            def _crew_started(_source, _event):
+                emit_trace({"type": "crew_started", "summary": "Crew execution started"})
 
-        return jsonify(
-            {
+            @crewai_event_bus.on(CrewKickoffCompletedEvent)
+            def _crew_completed(_source, _event):
+                emit_trace({"type": "crew_completed", "summary": "Crew execution completed"})
+
+            @crewai_event_bus.on(CrewKickoffFailedEvent)
+            def _crew_failed(_source, _event):
+                emit_trace({"type": "crew_failed", "summary": "Crew execution failed"})
+
+            @crewai_event_bus.on(TaskStartedEvent)
+            def _task_started(_source, event):
+                task_name = getattr(event.task, "name", None) or "task"
+                agent = getattr(getattr(event.task, "agent", None), "role", None)
+                emit_trace({
+                    "type": "task_started",
+                    "task": task_name,
+                    "agent": agent,
+                    "summary": f"Started {task_name}",
+                })
+
+            @crewai_event_bus.on(TaskCompletedEvent)
+            def _task_completed(_source, event):
+                task_name = getattr(event.task, "name", None) or "task"
+                agent = getattr(getattr(event.task, "agent", None), "role", None)
+                output = getattr(event.task_output, "raw", None) if hasattr(event, "task_output") else None
+                emit_trace({
+                    "type": "task_completed",
+                    "task": task_name,
+                    "agent": agent,
+                    "summary": f"Completed {task_name}",
+                    "output": _trim_text(str(output), 800) if output else None,
+                })
+
+            @crewai_event_bus.on(TaskFailedEvent)
+            def _task_failed(_source, event):
+                task_name = getattr(event.task, "name", None) or "task"
+                agent = getattr(getattr(event.task, "agent", None), "role", None)
+                emit_trace({
+                    "type": "task_failed",
+                    "task": task_name,
+                    "agent": agent,
+                    "summary": f"Failed {task_name}",
+                })
+
+            @crewai_event_bus.on(ToolUsageStartedEvent)
+            def _tool_started(_source, event):
+                emit_trace({
+                    "type": "tool_started",
+                    "tool": event.tool_name,
+                    "agent": event.agent_role,
+                    "task": event.task_name,
+                    "args": _sanitize_tool_args(event.tool_name, event.tool_args),
+                    "summary": f"Tool start: {event.tool_name}",
+                })
+
+            @crewai_event_bus.on(ToolUsageFinishedEvent)
+            def _tool_finished(_source, event):
+                emit_trace({
+                    "type": "tool_completed",
+                    "tool": event.tool_name,
+                    "agent": event.agent_role,
+                    "task": event.task_name,
+                    "output": _summarize_tool_output(event.tool_name, event.output),
+                    "summary": f"Tool done: {event.tool_name}",
+                })
+
+            @crewai_event_bus.on(ToolUsageErrorEvent)
+            def _tool_error(_source, event):
+                emit_trace({
+                    "type": "tool_failed",
+                    "tool": event.tool_name,
+                    "agent": event.agent_role,
+                    "task": event.task_name,
+                    "summary": f"Tool failed: {event.tool_name}",
+                })
+
+            # Execute crew with scoped handlers
+            inputs = _build_inputs(payload, conversation_summary)
+            with run_lock, crewai_event_bus.scoped_handlers():
+                crew = FinanceInsightCrew().build_crew()
+                result = crew.kickoff(inputs=inputs)
+
+            # Extract and save response
+            final_response, raw_output = _extract_final_response(result)
+            assistant_text = final_response or str(raw_output)
+            assistant_id = store.add_message(thread_id, "assistant", assistant_text, {})
+            memory.add_message_embedding(assistant_id, thread_id, assistant_text)
+
+            # Send final response
+            trace_payload = [
+                {
+                    "type": event.get("type"),
+                    "agent": event.get("agent"),
+                    "task": event.get("task"),
+                    "tool": event.get("tool"),
+                    "output": event.get("output"),
+                    "summary": event.get("summary"),
+                }
+                for event in traces
+            ]
+            
+            final_data = json.dumps({
+                "type": "response",
                 "reply": assistant_text,
                 "threadId": thread_id,
                 "traces": trace_payload,
+            })
+            yield f"data: {final_data}\n\n"
+
+        return app.response_class(
+            generate_stream(),
+            mimetype="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
             }
         )
 

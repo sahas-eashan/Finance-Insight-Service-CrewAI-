@@ -491,19 +491,20 @@ a {
   top: 50%;
   left: 50%;
   transform: translate(-50%, -50%);
-  width: 600px;
-  height: 600px;
-  background-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"><text x="50%" y="50%" font-family="Arial,sans-serif" font-size="48" font-weight="bold" fill="%23f47b20" text-anchor="middle" dominant-baseline="middle">WSO2</text></svg>');
+  width: 500px;
+  height: 200px;
+  background-image: url('/wso2-logo.png');
   background-size: contain;
   background-repeat: no-repeat;
   background-position: center;
-  opacity: 0.04;
+  opacity: 0.06;
   pointer-events: none;
   z-index: 0;
 }
 
 :root[data-theme="dark"] .chat-content::before {
-  opacity: 0.06;
+  filter: brightness(1.5) opacity(0.8);
+  opacity: 0.08;
 }
 
 .chat-view {
@@ -1222,6 +1223,64 @@ a {
 }
 
 .back-link:hover {
+  background: var(--hover-bg);
+}
+
+/* Live trace messages during thinking */
+.thinking-container {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.live-trace-messages {
+  margin-top: 12px;
+  padding: 12px;
+  background: rgba(59, 130, 246, 0.1);
+  border-left: 2px solid rgba(59, 130, 246, 0.5);
+  border-radius: 4px;
+  font-size: 0.9em;
+  line-height: 1.6;
+}
+
+:root[data-theme="dark"] .live-trace-messages {
+  background: rgba(47, 181, 170, 0.15);
+  border-left-color: rgba(47, 181, 170, 0.6);
+}
+
+.live-trace-item {
+  padding: 4px 0;
+  color: var(--text-secondary);
+  animation: fadeIn 0.3s ease-in;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.trace-toggle-row {
+  margin-top: 12px;
+  padding: 8px 0;
+}
+
+.trace-toggle {
+  color: var(--accent-cool);
+  font-size: 0.9em;
+  text-decoration: underline;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+  transition: background 200ms ease;
+}
+
+.trace-toggle:hover {
   background: var(--hover-bg);
 }
 

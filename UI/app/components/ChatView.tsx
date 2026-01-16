@@ -4,7 +4,137 @@ import { useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import ChatComposer from "./ChatComposer";
 import ChatEmptyState from "./ChatEmptyState";
-import { fetchHistory, sendMessage, fetchTrace, type ChatMessage } from "@/lib/api";
+import { fetchHistory, sendMessage, type ChatMessage } from "@/lib/api";
+
+type TraceEvent = {
+  type?: string;
+  agent?: string;
+  task?: string;
+  tool?: string;
+  output?: any;
+  summary?: string;
+};
+
+function TraceViewer({ events }: { events: TraceEvent[] }) {
+  return (
+    <div className="trace-viewer" onClick={(e) => e.stopPropagation()}>
+      <div className="trace-header">🔍 Agent Execution Trace</div>
+      {events.map((event, idx) => {
+        if (event.type === "task_started") {
+          return (
+            <div key={idx} className="trace-section trace-task-start">
+              <div className="trace-icon">📋</div>
+              <div className="trace-content">
+                <div className="trace-title">Task Started: {event.task}</div>
+                {event.agent ? <div className="trace-agent">Agent: {event.agent}</div> : null}
+              </div>
+            </div>
+          );
+        }
+        if (event.type === "task_completed") {
+          return (
+            <div key={idx} className="trace-section trace-task-complete">
+              <div className="trace-icon">✅</div>
+              <div className="trace-content">
+                <div className="trace-title">Task Completed: {event.task}</div>
+                {event.agent ? <div className="trace-agent">Agent: {event.agent}</div> : null}
+                {event.output ? (
+                  <details className="trace-output">
+                    <summary>View Output</summary>
+                    <pre>{event.output}</pre>
+                  </details>
+                ) : null}
+              </div>
+            </div>
+          );
+        }
+        if (event.type === "task_failed") {
+          return (
+            <div key={idx} className="trace-section trace-task-failed">
+              <div className="trace-icon">⚠️</div>
+              <div className="trace-content">
+                <div className="trace-title">Task Failed: {event.task}</div>
+                {event.agent ? <div className="trace-agent">Agent: {event.agent}</div> : null}
+              </div>
+            </div>
+          );
+        }
+        if (event.type === "tool_started") {
+          return (
+            <div key={idx} className="trace-section trace-tool">
+              <div className="trace-icon">🔧</div>
+              <div className="trace-content">
+                <div className="trace-title">Using Tool: {event.tool}</div>
+                {event.agent ? <div className="trace-detail">{event.agent}</div> : null}
+              </div>
+            </div>
+          );
+        }
+        if (event.type === "tool_completed") {
+          return (
+            <div key={idx} className="trace-section trace-tool-done">
+              <div className="trace-icon">✓</div>
+              <div className="trace-content">
+                <div className="trace-title">Tool Done: {event.tool}</div>
+                {event.output?.status ? (
+                  <div className="trace-detail">Status: {event.output.status}</div>
+                ) : null}
+              </div>
+            </div>
+          );
+        }
+        if (event.type === "tool_failed") {
+          return (
+            <div key={idx} className="trace-section trace-tool-failed">
+              <div className="trace-icon">⚠️</div>
+              <div className="trace-content">
+                <div className="trace-title">Tool Failed: {event.tool}</div>
+              </div>
+            </div>
+          );
+        }
+        if (event.type === "crew_started") {
+          return (
+            <div key={idx} className="trace-section trace-crew">
+              <div className="trace-icon">🚀</div>
+              <div className="trace-content">
+                <div className="trace-title">Crew Execution Started</div>
+              </div>
+            </div>
+          );
+        }
+        if (event.type === "crew_completed") {
+          return (
+            <div key={idx} className="trace-section trace-crew-done">
+              <div className="trace-icon">🎉</div>
+              <div className="trace-content">
+                <div className="trace-title">Crew Execution Completed</div>
+              </div>
+            </div>
+          );
+        }
+        if (event.type === "crew_failed") {
+          return (
+            <div key={idx} className="trace-section trace-crew-failed">
+              <div className="trace-icon">⚠️</div>
+              <div className="trace-content">
+                <div className="trace-title">Crew Execution Failed</div>
+              </div>
+            </div>
+          );
+        }
+        return (
+          <div key={idx} className="trace-section">
+            <div className="trace-icon">•</div>
+            <div className="trace-content">
+              <div className="trace-title">{event.summary || event.type}</div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
 const createLocalMessage = (role: ChatMessage["role"], content: string) => ({
   id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
@@ -35,12 +165,19 @@ export default function ChatView() {
   const [error, setError] = useState("");
   const [skipHistory, setSkipHistory] = useState(false);
   const [showTrace, setShowTrace] = useState(false);
-  const [traceEvents, setTraceEvents] = useState<any[]>([]);
   const [currentTraces, setCurrentTraces] = useState<any[]>([]);
+  const [liveMessages, setLiveMessages] = useState<string[]>([]);
   const router = useRouter();
   const searchParams = useSearchParams();
   const isNewSession = searchParams.get("new") === "1";
   const urlThreadId = searchParams.get("threadId");
+
+  useEffect(() => {
+    // Clear any prior trace state when switching threads
+    setCurrentTraces([]);
+    setShowTrace(false);
+    setLiveMessages([]);
+  }, [urlThreadId]);
 
   useEffect(() => {
     if (isNewSession) {
@@ -89,12 +226,21 @@ export default function ChatView() {
     setError("");
     setIsLoading(true);
     setShowTrace(false);
-    setTraceEvents([]);
     setCurrentTraces([]);
+    setLiveMessages([]);
     setMessages((prev) => [...prev, createLocalMessage("user", content)]);
 
     try {
-      const response = await sendMessage(content, threadId);
+      const response = await sendMessage(
+        content,
+        threadId,
+        (message: string, detail: any) => {
+          // Receive real-time trace updates
+          setLiveMessages((prev) => [...prev, message]);
+          setCurrentTraces((prev) => [...prev, detail]);
+        }
+      );
+      
       if (response.threadId) {
         setThreadId(response.threadId);
       }
@@ -116,11 +262,21 @@ export default function ChatView() {
           createLocalMessage("assistant", response.reply || ""),
         ]);
       }
+      
+      // Clear live messages after completion
+      setLiveMessages([]);
     } catch {
       setError("Message failed to send. Check your API settings.");
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const handleTraceToggle = () => {
+    if (!currentTraces.length) {
+      return;
+    }
+    setShowTrace((prev) => !prev);
   };
 
   return (
@@ -144,106 +300,43 @@ export default function ChatView() {
               );
             })}
             {isLoading ? (
-              <div 
-                className="message message--assistant message--pending"
-                style={{ cursor: currentTraces.length > 0 ? 'pointer' : 'default' }}
-                onClick={() => {
-                  if (currentTraces.length > 0) {
-                    setShowTrace(!showTrace);
-                  }
-                }}
-              >
-                {showTrace && currentTraces.length > 0 ? (
-                  <div className="trace-viewer" onClick={(e) => e.stopPropagation()}>
-                    <div className="trace-header">
-                      🔍 Agent Execution Trace
-                    </div>
-                    {currentTraces.map((event, idx) => {
-                      if (event.type === 'task_started') {
-                        return (
-                          <div key={idx} className="trace-section trace-task-start">
-                            <div className="trace-icon">📋</div>
-                            <div className="trace-content">
-                              <div className="trace-title">Task Started: {event.task}</div>
-                              <div className="trace-agent">Agent: {event.agent}</div>
-                            </div>
-                          </div>
-                        );
-                      }
-                      if (event.type === 'task_completed') {
-                        return (
-                          <div key={idx} className="trace-section trace-task-complete">
-                            <div className="trace-icon">✅</div>
-                            <div className="trace-content">
-                              <div className="trace-title">Task Completed: {event.task}</div>
-                              <div className="trace-agent">Agent: {event.agent}</div>
-                              {event.output && (
-                                <details className="trace-output">
-                                  <summary>View Output</summary>
-                                  <pre>{event.output}</pre>
-                                </details>
-                              )}
-                            </div>
-                          </div>
-                        );
-                      }
-                      if (event.type === 'tool_started') {
-                        return (
-                          <div key={idx} className="trace-section trace-tool">
-                            <div className="trace-icon">🔧</div>
-                            <div className="trace-content">
-                              <div className="trace-title">Using Tool: {event.tool}</div>
-                              <div className="trace-detail">{event.agent}</div>
-                            </div>
-                          </div>
-                        );
-                      }
-                      if (event.type === 'tool_completed') {
-                        return (
-                          <div key={idx} className="trace-section trace-tool-done">
-                            <div className="trace-icon">✓</div>
-                            <div className="trace-content">
-                              <div className="trace-title">Tool Done: {event.tool}</div>
-                              {event.output?.status && (
-                                <div className="trace-detail">Status: {event.output.status}</div>
-                              )}
-                            </div>
-                          </div>
-                        );
-                      }
-                      if (event.type === 'crew_started') {
-                        return (
-                          <div key={idx} className="trace-section trace-crew">
-                            <div className="trace-icon">🚀</div>
-                            <div className="trace-content">
-                              <div className="trace-title">Crew Execution Started</div>
-                            </div>
-                          </div>
-                        );
-                      }
-                      if (event.type === 'crew_completed') {
-                        return (
-                          <div key={idx} className="trace-section trace-crew-done">
-                            <div className="trace-icon">🎉</div>
-                            <div className="trace-content">
-                              <div className="trace-title">Crew Execution Completed</div>
-                            </div>
-                          </div>
-                        );
-                      }
-                      return (
-                        <div key={idx} className="trace-section">
-                          <div className="trace-icon">•</div>
-                          <div className="trace-content">
-                            <div className="trace-title">{event.summary || event.type}</div>
-                          </div>
+              <div className="message message--assistant message--pending">
+                <div className="thinking-container">
+                  <button
+                    type="button"
+                    onClick={handleTraceToggle}
+                    style={{ background: "none", border: "none", padding: 0, margin: 0, color: "inherit", cursor: currentTraces.length ? "pointer" : "default" }}
+                    aria-label="Show trace"
+                    disabled={!currentTraces.length}
+                  >
+                    Thinking...
+                  </button>
+                  {liveMessages.length > 0 && (
+                    <div className="live-trace-messages">
+                      {liveMessages.slice(-3).map((msg, idx) => (
+                        <div key={idx} className="live-trace-item">
+                          {msg}
                         </div>
-                      );
-                    })}
-                  </div>
-                ) : (
-                  <span>Thinking... (click to view trace)</span>
-                )}
+                      ))}
+                    </div>
+                  )}
+                </div>
+                {showTrace && currentTraces.length > 0 ? (
+                  <TraceViewer events={currentTraces} />
+                ) : null}
+              </div>
+            ) : null}
+            {!isLoading && currentTraces.length > 0 ? (
+              <div className="trace-toggle-row">
+                <button
+                  type="button"
+                  onClick={handleTraceToggle}
+                  className="trace-toggle"
+                  aria-label="Show trace"
+                >
+                  View trace
+                </button>
+                {showTrace ? <TraceViewer events={currentTraces} /> : null}
               </div>
             ) : null}
           </div>

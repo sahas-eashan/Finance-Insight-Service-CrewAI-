@@ -145,8 +145,11 @@ export const fetchHistory = async (threadId?: string): Promise<ChatMessage[]> =>
 export const sendMessage = async (
   message: string,
   threadId?: string,
+  onTrace?: (message: string, detail: any) => void,
 ): Promise<ChatResponse> => {
   const { baseUrl, apiKey } = getApiConfig();
+  
+  // Use fetch with streaming for POST
   const response = await fetch(`${baseUrl}/chat`, {
     method: "POST",
     headers: buildHeaders(apiKey),
@@ -157,27 +160,60 @@ export const sendMessage = async (
     throw new Error("Failed to send message");
   }
 
-  const data = (await response.json()) as {
-    reply?: string;
-    response?: string;
-    message?: string;
-    output?: string;
-    threadId?: string;
-    thread_id?: string;
-    conversationId?: string;
-    messages?: ChatMessage[];
-    data?: { messages?: ChatMessage[] };
-  };
+  const reader = response.body?.getReader();
+  if (!reader) {
+    throw new Error("No response stream");
+  }
 
-  const normalizedMessages = (data.messages ?? data.data?.messages ?? []).map(
-    (entry) => normalizeMessage(entry, "assistant"),
-  );
+  const decoder = new TextDecoder();
+  const traces: any[] = [];
+  let finalResponse: ChatResponse | null = null;
 
-  return {
-    reply: data.reply ?? data.response ?? data.message ?? data.output ?? "",
-    messages: normalizedMessages.length ? normalizedMessages : undefined,
-    threadId: data.threadId ?? data.thread_id ?? data.conversationId,
-  };
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      const chunk = decoder.decode(value, { stream: true });
+      const lines = chunk.split('\n');
+
+      for (const line of lines) {
+        if (line.startsWith('data: ')) {
+          try {
+            const data = JSON.parse(line.slice(6));
+            
+            if (data.type === "trace") {
+              traces.push(data.detail);
+              if (onTrace) {
+                onTrace(data.message, data.detail);
+              }
+            } else if (data.type === "response") {
+              const normalizedMessages = (data.messages ?? []).map(
+                (entry: any) => normalizeMessage(entry, "assistant"),
+              );
+              
+              finalResponse = {
+                reply: data.reply ?? "",
+                messages: normalizedMessages.length ? normalizedMessages : undefined,
+                threadId: data.threadId,
+                traces: data.traces ?? traces,
+              };
+            }
+          } catch (e) {
+            // Ignore malformed JSON
+          }
+        }
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  if (!finalResponse) {
+    throw new Error("No response received");
+  }
+
+  return finalResponse;
 };
 
 export const testConnection = async (config?: ApiConfig): Promise<boolean> => {

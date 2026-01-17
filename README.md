@@ -1,7 +1,28 @@
 # Finance Insight Service - CrewAI
 
-## Overview
-Finance Insight Service is a multi-agent AI system that delivers comprehensive financial analysis through a structured workflow. The system uses 4 specialized agents working sequentially through 8 tasks to provide news analysis, market data, quantitative metrics, and validated insights.
+## Use Case Description
+
+**Overview:**
+Finance Insight Service is an AI-powered financial research assistant that combines real-time news analysis, market data, and quantitative modeling to deliver validated investment insights.
+
+**The Problem:**
+Individual investors and financial analysts waste hours manually researching stocks—reading scattered news articles, checking multiple data sources, calculating metrics, and trying to make sense of conflicting information. Traditional tools either provide raw data without context or AI responses that "hallucinate" numbers and make unverifiable claims.
+
+**Target Users:**
+- **Retail investors** who want professional-grade analysis without expensive Bloomberg terminals
+- **Financial analysts** who need to validate research quickly before making recommendations
+- **Finance students** learning how to conduct proper equity research with citations
+- **Portfolio managers** who need to track multiple positions with consistent, auditable analysis
+
+**Key Benefits:**
+This system solves the "AI hallucination" problem in financial analysis by:
+- **Never letting LLMs do math** - All calculations run through sandboxed Python (no made-up numbers)
+- **Requiring citations** - Every claim is backed by scraped sources with timestamps
+- **Multi-stage validation** - Dedicated auditor agent rejects outputs that fail quality checks
+- **Transparent limitations** - Clearly states what data is missing or uncertain
+- **Reproducible results** - Same inputs = same outputs (deterministic calculations)
+
+Instead of spending 2-3 hours researching a stock, users get a comprehensive analysis in 5-10 minutes—with confidence that numbers are real, sources are cited, and limitations are disclosed.
 
 ---
 
@@ -21,6 +42,85 @@ The system uses a **sequential multi-agent workflow** with quality gates at each
 - **Graceful degradation** - Partial data produces responses with clear limitations
 - **Context awareness** - Each task sees outputs from all previous tasks
 - **Transparency** - Failures are documented, not hidden
+
+---
+
+## Framework: CrewAI
+
+### Why CrewAI?
+
+Built using **CrewAI** for multi-agent orchestration. CrewAI provides:
+
+- **Sequential Process** - Agents execute in defined order, each task waits for previous to complete
+- **Context Passing** - Tasks automatically receive outputs from dependent tasks
+- **Built-in Tracing** - Event bus emits real-time events (tool usage, task completion, errors)
+- **Agent Specialization** - Each agent has role, goal, backstory, and specific tools
+- **Task Dependencies** - Explicit context chains ensure data flows correctly
+- **LLM Flexibility** - Works with OpenAI, Anthropic, or any LiteLLM-compatible model
+
+### Agent Definition in CrewAI
+
+Each agent is created with:
+```python
+Agent(
+    role="Research Agent (news + evidence)",
+    goal="Discover relevant news and extract evidence-backed drivers",
+    backstory="You are a meticulous researcher who only uses sources you can access...",
+    tools=[SerperDevTool(), ScrapeWebsiteTool()],
+    allow_delegation=False  # No agent-to-agent delegation
+)
+```
+
+- **Role**: Short description of agent's function
+- **Goal**: What success looks like for this agent
+- **Backstory**: Detailed behavioral instructions and constraints
+- **Tools**: List of callable functions the agent can use
+- **allow_delegation**: Set to False (planner decides workflow, not agents)
+
+### Task Definition in CrewAI
+
+Each task is created with:
+```python
+Task(
+    description="You are given a research request: {user_request}...",
+    expected_output="Return strict JSON with keys: drivers, articles, limitations",
+    agent=researcher_agent,
+    context=[planner_task]  # Can access planner task output
+)
+```
+
+- **description**: Instructions with placeholders (`{user_request}`, `{current_date}`)
+- **expected_output**: JSON schema the agent must follow
+- **agent**: Which agent executes this task
+- **context**: List of previous tasks whose outputs are available
+
+### How Context Flows in CrewAI
+
+Tasks declare dependencies via `context` parameter:
+
+```python
+research_task.context = [planner_task]
+audit_research_task.context = [planner_task, research_task]
+quant_task.context = [planner_task, research_task, audit_research_task]
+final_report_task.context = [all_7_previous_tasks]
+```
+
+CrewAI automatically:
+- Waits for context tasks to complete
+- Passes outputs to the next task's LLM prompt
+- Makes all previous outputs available via task context
+
+This enables rich decision-making without manual state management.
+
+### Why Sequential Process?
+
+CrewAI supports multiple process types (sequential, hierarchical, consensual). We chose **sequential** because:
+
+- **Validation gates**: Auditor can check quality before proceeding
+- **Full context**: Each agent sees everything previous agents produced
+- **Debuggability**: Linear execution trace, easy to understand what happened
+- **Predictability**: No race conditions or parallel conflicts
+- **Trade-off**: Slower than parallel, but accuracy and transparency are more important
 
 ---
 

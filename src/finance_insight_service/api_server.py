@@ -748,7 +748,15 @@ def _collect_traces() -> tuple[list[dict[str, Any]], threading.Lock]:
 def create_app() -> Flask:
     load_dotenv()
     app = Flask(__name__)
-    CORS(app, resources={r"/*": {"origins": "*"}})
+    CORS(app, resources={
+        r"/*": {
+            "origins": "*",
+            "methods": ["GET", "POST", "OPTIONS"],
+            "allow_headers": ["Content-Type", "Authorization", "X-API-Key"],
+            "expose_headers": ["Content-Type"],
+            "supports_credentials": False
+        }
+    })
 
     mongo_uri = os.getenv("MONGO_URI", "mongodb://localhost:27017")
     mongo_db = os.getenv("MONGO_DB", "finance_insight")

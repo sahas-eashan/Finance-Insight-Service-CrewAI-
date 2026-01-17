@@ -1388,31 +1388,15 @@ a {
 
 @media (max-width: 1024px) {
   .sidebar {
-    width: 240px;
-    position: fixed;
-    left: 0;
-    top: 0;
-    z-index: 100;
-    transform: translateX(0);
-    transition: transform 0.3s ease;
-    box-shadow: 2px 0 8px rgba(0, 0, 0, 0.1);
+    display: none;
   }
 
   .chat-main {
     padding: 18px 20px 28px;
-    margin-left: 240px;
   }
 }
 
 @media (max-width: 720px) {
-  .sidebar {
-    width: 220px;
-  }
-
-  .chat-main {
-    margin-left: 220px;
-  }
-
   .topbar {
     grid-template-columns: auto 1fr;
   }

@@ -49,59 +49,202 @@ def _safe_json(value: Any) -> str:
 
 
 def _simplify_trace(event: dict[str, Any]) -> str:
-    """Convert trace event to human-readable message."""
+    """Convert trace event to human-readable message with detailed context."""
     event_type = event.get("type")
+    agent = event.get("agent", "")
     
     if event_type == "crew_started":
-        return "🚀 Starting analysis..."
+        return "Starting analysis"
     
     if event_type == "crew_completed":
-        return "🎉 Analysis complete!"
+        return "Analysis complete"
     
     if event_type == "task_started":
         task = event.get("task", "task")
-        return f"📋 Working on: {task}"
+        if agent:
+            return f"Agent '{agent}' is working on {task}"
+        return f"Working on: {task}"
     
     if event_type == "task_completed":
         task = event.get("task", "task")
-        return f"✅ Completed: {task}"
+        output = event.get("output", {})
+        
+        # Parse output if it's a JSON string
+        task_result = output
+        if isinstance(output, str):
+            try:
+                task_result = json.loads(output)
+            except:
+                task_result = {}
+        
+        # Audit task completion - show status and reason
+        if "audit" in task.lower():
+            if isinstance(task_result, dict):
+                status = task_result.get("audit_status", "")
+                issues = task_result.get("issues", [])
+                
+                if status:
+                    msg = f"Audit {status.lower()}"
+                    # Add first issue if rejected/partial
+                    if issues and status in ["REJECTED", "PARTIAL"]:
+                        first_issue = issues[0] if isinstance(issues[0], dict) else {}
+                        problem = first_issue.get("problem", "")
+                        if problem:
+                            msg += f" - {problem[:80]}"
+                    return msg
+        
+        # Planner task completion - show selected tools
+        if "plan" in task.lower() or "manager" in task.lower():
+            if isinstance(task_result, dict):
+                plan = task_result.get("plan", {})
+                if isinstance(plan, dict):
+                    selected_tools = []
+                    if plan.get("use_research"):
+                        selected_tools.append("Research")
+                    if plan.get("use_quant"):
+                        selected_tools.append("Quant")
+                    if plan.get("use_audit"):
+                        selected_tools.append("Audit")
+                    
+                    if selected_tools:
+                        return f"Plan ready → Using: {', '.join(selected_tools)}"
+        
+        # Default task completion
+        if agent:
+            return f"Agent '{agent}' completed {task}"
+        return f"Completed: {task}"
     
     if event_type == "tool_started":
         tool = event.get("tool", "")
         args = event.get("args", {})
+        agent_prefix = f"{agent} is " if agent else "Agent is "
         
+        # Web scraping/reading tools
+        if "scrape" in tool.lower() or "website" in tool.lower() or "read" in tool.lower():
+            url = args.get("url", args.get("website_url", ""))
+            if url:
+                # Extract clean domain from URL
+                domain = url.split('/')[2] if '://' in url else url.split('/')[0]
+                # Remove www. prefix
+                domain = domain.replace('www.', '')
+                return f"{agent_prefix}reading from {domain}"
+            return f"{agent_prefix}reading website content"
+        
+        # Search tools
         if "search" in tool.lower() or "serp" in tool.lower():
             query = args.get("query", args.get("search_query", ""))
             if query:
-                return f"🔍 Searching the web for: {query[:60]}..."
-            return "🔍 Searching the web..."
+                return f"{agent_prefix}searching web: '{query[:60]}'"
+            return f"{agent_prefix}searching the web"
         
+        # Fundamentals tools
         if "fundamentals" in tool.lower():
             ticker = args.get("ticker", args.get("symbol", ""))
             if ticker:
-                return f"📊 Analyzing fundamentals for {ticker}..."
-            return "📊 Fetching financial data..."
+                return f"{agent_prefix}analyzing fundamentals for {ticker}"
+            return f"{agent_prefix}fetching financial data"
         
+        # Market data tools
         if "market" in tool.lower() or "price" in tool.lower():
             ticker = args.get("ticker", args.get("symbol", ""))
             if ticker:
-                return f"📈 Getting market data for {ticker}..."
-            return "📈 Fetching market data..."
+                return f"{agent_prefix}getting market data for {ticker}"
+            return f"{agent_prefix}fetching market data"
         
-        return f"🔧 Using tool: {tool}"
+        return f"{agent_prefix}using {tool}"
     
     if event_type == "tool_completed":
         tool = event.get("tool", "")
+        output = event.get("output", {})
+        args = event.get("args", {})
+        
+        # Web scraping completion
+        if "scrape" in tool.lower() or "website" in tool.lower() or "read" in tool.lower():
+            url = args.get("url", args.get("website_url", ""))
+            if url:
+                # Extract clean domain name
+                domain = url.split('/')[2] if '://' in url else url.split('/')[0]
+                # Remove www. prefix for cleaner display
+                domain = domain.replace('www.', '')
+                return f"Completed reading from {domain}"
+            return "Website content retrieved"
+        
+        # Search completion
         if "search" in tool.lower() or "serp" in tool.lower():
-            return "✓ Web search completed"
+            if isinstance(output, dict):
+                results = output.get("results", [])
+                if results and len(results) > 0:
+                    # Try to get first result title/snippet
+                    first_result = results[0] if isinstance(results[0], dict) else {}
+                    title = first_result.get("title", first_result.get("name", ""))
+                    snippet = first_result.get("snippet", first_result.get("description", ""))
+                    
+                    msg = f"Found {len(results)} results"
+                    if title:
+                        msg += f" → Top: {title[:150]}"
+                    elif snippet:
+                        msg += f" → {snippet[:150]}"
+                    return msg
+            return "Web search completed"
+        
+        # Fundamentals completion
         if "fundamentals" in tool.lower():
-            return "✓ Financial data retrieved"
-        if "market" in tool.lower():
-            return "✓ Market data retrieved"
-        return f"✓ Tool completed: {tool}"
+            ticker = args.get("ticker", args.get("symbol", ""))
+            msg = "Retrieved financial data"
+            if ticker:
+                msg += f" for {ticker}"
+            
+            # Try to extract key metrics from output
+            if isinstance(output, dict):
+                metrics = []
+                # Look for common financial metrics
+                if "output_preview" in output:
+                    preview = str(output["output_preview"])[:80]
+                    if preview:
+                        msg += f" → {preview}..."
+                        return msg
+                        
+                for key in ["market_cap", "pe_ratio", "revenue", "eps", "price"]:
+                    if key in output and output[key]:
+                        metrics.append(f"{key.replace('_', ' ')}: {output[key]}")
+                if metrics:
+                    msg += f" → {', '.join(metrics[:2])}"
+            return msg
+        
+        # Market data completion
+        if "market" in tool.lower() or "price" in tool.lower():
+            ticker = args.get("ticker", args.get("symbol", ""))
+            msg = "Retrieved market data"
+            if ticker:
+                msg += f" for {ticker}"
+            
+            if isinstance(output, dict):
+                # Try to extract price/data info
+                if "output_preview" in output:
+                    preview = str(output["output_preview"])[:80]
+                    if preview:
+                        msg += f" → {preview}..."
+                        return msg
+                        
+                price = output.get("price", output.get("last_price", output.get("close", "")))
+                if price:
+                    msg += f" → Price: {price}"
+            return msg
+        
+        # Generic tool completion with output preview
+        msg = f"Completed {tool}"
+        if isinstance(output, dict) and "output_preview" in output:
+            preview = str(output["output_preview"])[:200]
+            if preview:
+                msg += f" → {preview}"
+        elif isinstance(output, str) and output.strip():
+            preview = output.strip()[:200]
+            msg += f" → {preview}"
+        
+        return msg
     
     # Fallback
-    return event.get("summary", "Processing...")
+    return event.get("summary", "Processing")
 
 
 def _normalize_list(value: Any) -> list[str]:
@@ -456,8 +599,16 @@ def _build_inputs(payload: dict[str, Any], conversation_summary: str) -> dict[st
         provided_data = json.dumps(provided_data)
     search_query = _build_search_query(query, tickers, sites)
 
+    # Get current date/time to provide context
+    current_date = datetime.now().strftime("%Y-%m-%d")
+    current_year = datetime.now().year
+    current_month = datetime.now().strftime("%B")
+
     runtime_defaults = {
         "user_request": user_request,
+        "current_date": current_date,
+        "current_year": current_year,
+        "current_month": current_month,
         "symbol": symbol,
         "interval": interval,
         "outputsize": outputsize,
@@ -472,6 +623,8 @@ def _build_inputs(payload: dict[str, Any], conversation_summary: str) -> dict[st
 
     return {
         "user_request": user_request,
+        "current_date": current_date,
+        "current_year": current_year,
         "conversation_summary": conversation_summary,
         "runtime_defaults": json.dumps(runtime_defaults),
         "sources_requested": str(bool(payload.get("sources_requested"))),
@@ -740,13 +893,16 @@ def create_app() -> Flask:
 
         def generate_stream():
             """Generate SSE stream with real-time trace updates."""
+            print("[STREAM] Starting SSE stream generation")
             traces: list[dict[str, Any]] = []
+            events_to_send: list[str] = []
             lock = threading.Lock()
 
             def emit_trace(entry: dict[str, Any]) -> None:
+                print(f"[EMIT_TRACE] Called with type={entry.get('type')}")
                 with lock:
                     traces.append(entry)
-                    # Send simplified message immediately
+                    # Queue simplified message to send
                     simple_msg = _simplify_trace(entry)
                     event_data = json.dumps({
                         "type": "trace",
@@ -758,7 +914,9 @@ def create_app() -> Flask:
                             "tool": entry.get("tool"),
                         }
                     })
-                    yield f"data: {event_data}\n\n"
+                    events_to_send.append(f"data: {event_data}\n\n")
+                    print(f"[TRACE] {simple_msg}")  # Debug log
+                    print(f"[EMIT_TRACE] Queued event, total in queue: {len(events_to_send)}")
 
             @crewai_event_bus.on(CrewKickoffStartedEvent)
             def _crew_started(_source, _event):
@@ -825,6 +983,7 @@ def create_app() -> Flask:
                     "tool": event.tool_name,
                     "agent": event.agent_role,
                     "task": event.task_name,
+                    "args": _sanitize_tool_args(event.tool_name, event.tool_args),
                     "output": _summarize_tool_output(event.tool_name, event.output),
                     "summary": f"Tool done: {event.tool_name}",
                 })
@@ -841,9 +1000,72 @@ def create_app() -> Flask:
 
             # Execute crew with scoped handlers
             inputs = _build_inputs(payload, conversation_summary)
-            with run_lock, crewai_event_bus.scoped_handlers():
-                crew = FinanceInsightCrew().build_crew()
-                result = crew.kickoff(inputs=inputs)
+            print(f"[STREAM] Starting crew execution with inputs: {list(inputs.keys())}")
+            
+            # Send a test trace to verify streaming works
+            print("[STREAM] Sending test trace")
+            emit_trace({"type": "crew_started", "summary": "Starting analysis"})
+            
+            # Flag to track completion
+            execution_complete = threading.Event()
+            execution_result = {}
+            
+            def run_crew():
+                try:
+                    print("[CREW] Starting crew thread")
+                    with run_lock:
+                        crew = FinanceInsightCrew().build_crew()
+                        print("[CREW] Crew built, starting kickoff")
+                        result = crew.kickoff(inputs=inputs)
+                        execution_result['result'] = result
+                        print("[CREW] Crew execution completed successfully")
+                except Exception as e:
+                    print(f"[CREW] Error during execution: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    execution_result['error'] = str(e)
+                finally:
+                    execution_complete.set()
+                    print("[CREW] Crew thread finished")
+            
+            # Start crew execution in background
+            crew_thread = threading.Thread(target=run_crew)
+            crew_thread.start()
+            print("[STREAM] Crew thread started, beginning event polling")
+            
+            # Stream events as they come in
+            events_sent = 0
+            while not execution_complete.is_set():
+                with lock:
+                    while events_to_send:
+                        event = events_to_send.pop(0)
+                        events_sent += 1
+                        print(f"[STREAM] Yielding event #{events_sent}")
+                        yield event
+                execution_complete.wait(timeout=0.1)  # Check every 100ms
+            
+            print(f"[STREAM] Execution complete, sending remaining events")
+            # Yield any remaining events
+            with lock:
+                while events_to_send:
+                    event = events_to_send.pop(0)
+                    events_sent += 1
+                    print(f"[STREAM] Yielding final event #{events_sent}")
+                    yield event
+            
+            # Wait for thread to complete
+            crew_thread.join()
+            print(f"[STREAM] Crew thread joined, total events sent: {events_sent}")
+            
+            # Check for errors
+            if 'error' in execution_result:
+                yield f"data: {json.dumps({'type': 'error', 'message': execution_result['error']})}\n\n"
+                return
+            
+            result = execution_result.get('result')
+            if not result:
+                yield f"data: {json.dumps({'type': 'error', 'message': 'No result from crew'})}\n\n"
+                return
 
             # Extract and save response
             final_response, raw_output = _extract_final_response(result)

@@ -1,103 +1,329 @@
 # Finance Insight Service - CrewAI
 
 ## Overview
-Finance Insight Service uses a plan -> execute -> audit -> repair cycle to deliver finance news, a market snapshot, and bounded scenarios. It prioritizes accuracy over speed and avoids "LLM does math" errors by routing all calculations through a sandboxed Python execution tool.
+Finance Insight Service is a multi-agent AI system that delivers comprehensive financial analysis through a structured workflow. The system uses 4 specialized agents working sequentially through 8 tasks to provide news analysis, market data, quantitative metrics, and validated insights.
 
-## Quick Start
+---
 
-### Prerequisites
-- Python 3.10+
-- Node.js 18+
-- MongoDB running locally
-- Required API keys (see Configuration below)
+## Architecture Overview
 
-### One-Command Start
-```bash
-./run.sh
+The system uses a **sequential multi-agent workflow** with quality gates at each step:
+
+### **Agents:**
+1. **Planner** - Orchestrates workflow and decides which modules to run
+2. **Researcher** - Gathers news, evidence, and formulas from web sources
+3. **Quant** - Fetches market data, calculates metrics, runs scenarios
+4. **Auditor** - Validates outputs for quality, accuracy, and compliance
+
+### **Key Design Principles:**
+- **Accuracy over speed** - Multiple validation checkpoints ensure quality
+- **No LLM math** - All calculations run through sandboxed Python execution
+- **Graceful degradation** - Partial data produces responses with clear limitations
+- **Context awareness** - Each task sees outputs from all previous tasks
+- **Transparency** - Failures are documented, not hidden
+
+---
+
+## Complete Execution Flow
+
+### **8 Sequential Tasks:**
+
+#### **1. PLANNER_TASK** (Planner Agent)
+**Purpose:** Decides workflow strategy based on user request
+
+**Receives:**
+- User request
+- Current date/time
+- Conversation summary
+
+**Decides:**
+- Which modules to use (Research/Quant/Audit)
+- Search parameters (query, tickers, sites, days)
+- Quantitative parameters (symbol, interval, horizon)
+
+**Outputs:**
+- `plan`: Which modules to run and why
+- `research_request`: Query parameters for research
+- `quant_request`: Parameters for quantitative analysis
+- `notes`: Planning considerations
+
+---
+
+#### **2. RESEARCH_NEWS_TASK** (Researcher Agent)
+**Purpose:** Gathers news articles and extracts evidence-backed insights
+
+**Tools:**
+- SerperDev/SerpApi for web search
+- ScrapeWebsiteTool for full article content
+
+**Actions:**
+- Searches web for relevant articles (max 8)
+- Scrapes full content from URLs
+- Extracts headline, timestamp, key points
+- Clusters information into 2-4 drivers (earnings, macro, regulation, product news)
+- Extracts formulas/metrics when needed
+
+**Outputs:**
+- `drivers`: Key themes with explanations and citations
+- `articles`: Full article metadata with key points
+- `metrics_formulas`: Financial formulas extracted from sources
+- `limitations`: Failed URLs, missing data, etc.
+
+**Example Output:**
+```json
+{
+  "drivers": [
+    {
+      "driver": "AI Infrastructure Growth",
+      "why_it_matters": "Data center spending increased 40% YoY driven by GPU demand",
+      "citations": [{"url": "...", "evidence": "..."}]
+    }
+  ]
+}
 ```
 
-This will start both:
-- **Backend API** on http://localhost:5000
-- **Frontend UI** on http://localhost:3000
+---
 
-### Manual Start
-If you prefer to run them separately:
+#### **3. AUDIT_RESEARCH_TASK** (Auditor Agent)
+**Purpose:** Validates research quality before proceeding
 
-**Backend:**
-```bash
-uv run finance_insight_api --host 0.0.0.0 --port 5000
+**Validates:**
+- Citations present and valid
+- Timestamps not missing or fabricated
+- Relevance to user request
+- Formula extraction when needed
+
+**Returns:** APPROVED | REJECTED | PARTIAL
+
+**Example REJECTED:**
+```json
+{
+  "audit_status": "REJECTED",
+  "issues": [{
+    "category": "data_quality",
+    "problem": "Research provided no valid citations",
+    "fix_action": "Rerun research with at least 2-3 accessible sources"
+  }],
+  "required_reruns": ["research"]
+}
 ```
 
-**Frontend:**
-```bash
-cd UI
-npm run dev
+**Example PARTIAL:**
+```json
+{
+  "audit_status": "PARTIAL",
+  "issues": [{
+    "category": "incomplete_data",
+    "problem": "Only 1 source scraped, target was 3",
+    "fix_action": "Note limitation but proceed with available data"
+  }],
+  "approved_modules": ["research"],
+  "notes": ["2 URLs blocked, 1 succeeded"]
+}
 ```
 
-## Configuration
+---
 
-Copy `.env.example` to `.env` and add: `OPENAI_API_KEY` plus either `SERPER_API_KEY` or `SERPAPI_API_KEY`. Optionally add `TWELVE_DATA_API_KEY` (falls back to Stooq when missing) and `ALPHAVANTAGE_API_KEY` for fundamentals/ratios. For the Flask API, set `MONGO_URI`, `MONGO_DB`, and optional `API_KEY`.
+#### **4. QUANT_SNAPSHOT_TASK** (Quant Agent)
+**Purpose:** Fetches market data and performs calculations
 
-Limitation: Some sources (for example, Reuters or Bloomberg) may block scraping due to JavaScript or bot protection, so results may fall back to headlines/snippets.
-Improvement: Add a JS-capable scraper or a paid content API to increase full-text coverage.
+**Tools:**
+- MarketDataFetch (Twelve Data → Stooq fallback)
+- FundamentalsFetch (Alpha Vantage)
+- SafePythonExec (sandboxed numpy/pandas)
 
-## Goals and constraints
-- Deliver finance news + stock brief + bounded scenarios + non-personalized "watch/monitor/avoid" outputs.
-- Prioritize maximum accuracy over speed via review loops.
-- Avoid "LLM does math" mistakes by performing all calculations through a sandboxed Python execution tool.
+**Actions:**
+- Confirms current date via Python datetime
+- Fetches market data (price history, volume)
+- Fetches fundamentals (P/E, ROE, margins, cash flow)
+- Runs calculations using SafePythonExec
+- Computes metrics from research formulas
+- Generates scenarios (base/bull/bear) if requested
 
-## Orchestration approach
-This is not a rigid deterministic pipeline. It is a plan -> execute -> audit -> repair cycle:
-- A planning agent decides which steps are needed (news only vs market + indicators vs scenarios).
-- A dedicated auditor approves or rejects results.
-- If rejected, only the failed parts are rerun (bounded retries).
-- Within each step, work is deterministic where possible.
+**Outputs:**
+- `as_of`: Timestamp and data provider
+- `snapshot`: Current metrics and data points
+- `scenarios`: Price targets with assumptions (optional)
+- `limitations`: Missing data, API failures
 
-## Agent stack
+**Example Output:**
+```json
+{
+  "as_of": {"timestamp": "2026-01-17", "provider": "TwelveData"},
+  "snapshot": {
+    "last_close": 150.25,
+    "returns_1d": 0.023,
+    "volatility_annualized": 0.28
+  },
+  "scenarios": {
+    "base": {"price_target": 165, "assumptions": "Expected return over 30 days"},
+    "bull": {"price_target": 180, "assumptions": "+1.0 sigma move"},
+    "bear": {"price_target": 140, "assumptions": "-1.0 sigma move"}
+  }
+}
+```
 
-### 1) Planner and Report Synthesizer (Manager)
-Responsibilities:
-- Parse request (tickers, horizon, modules).
-- Assign tasks to Research and Quant.
-- Trigger audit, apply repair loop if needed.
-- Produce final response only from audited and approved facts.
+---
 
-### 2) Research Agent (news + evidence)
-Responsibilities:
-- Discover and read relevant articles.
-- Extract the "why it matters" with timestamps and citations.
-- Cluster headlines into 2 to 4 drivers (earnings, macro, regulation, product news, etc.).
+#### **5. AUDIT_QUANT_TASK** (Auditor Agent)
+**Purpose:** Validates quantitative analysis quality
 
-Tools (2):
-- SerperDevTool (CrewAI) or SerpApiGoogleSearchTool (CrewAI) for web/news discovery (free keys).
-  - Serper tool: https://docs.crewai.com/en/tools/search-research/serperdevtool
-  - SerpApi tool: https://docs.crewai.com/en/tools/search-research/serpapi-googlesearchtool
-- Requires `SERPER_API_KEY` for Serper or `SERPAPI_API_KEY` for SerpApi (different services).
-- Searches can be scoped to specific domains using `site:example.com` filters (for example: `site:reuters.com OR site:bloomberg.com`).
-- ScrapeWebsiteTool (CrewAI) to fetch full article content (not just snippets):
-  - https://docs.crewai.com/en/tools/search-research/scrapewebsitetool
+**Validates:**
+- Numeric sanity (no NaN, realistic values)
+- Required metrics computed
+- Scenario assumptions reasonable
+- RSI within 0-100, prices positive, etc.
 
-### 3) Quant Agent (market data + indicators + scenarios via Python)
-Responsibilities:
-- Decide which computations are needed based on the request (not all metrics by default).
-- Use provided data when supplied; fetch market data only when needed.
-- Compute indicators deterministically (returns, volatility, RSI, MAs, drawdown, etc.).
-- Generate bounded scenarios (base/bull/bear) when the request calls for them.
+**Returns:** APPROVED | REJECTED | PARTIAL
 
-Tools (3):
-- market_data_fetch (custom tool with provider fallback)
-  - Provider order (recommended): Twelve Data -> Stooq else skip.
-- fundamentals_fetch (custom tool)
-  - Provider: Alpha Vantage (requires `ALPHAVANTAGE_API_KEY`, free tier is rate-limited).
-- safe_python_exec (custom tool): executes small, calculator-style Python scripts with numpy/pandas allowed; returns SUCCESS with final_output or CODE ERROR for self-repair.
+---
 
-### 4) Auditor (logic + compliance gate)
-Responsibilities:
-- Reject impossible metrics (e.g., RSI outside 0 to 100).
-- Check freshness (dates) and that every factual claim has a citation.
-- Ensure output is informational and uncertainty-aware (no guaranteed returns or personalized advice).
+#### **6. FINAL_DRAFT_TASK** (Planner Agent)
+**Purpose:** Creates first draft of response
 
-Tools (3):
+**Rules:**
+- Use only approved outputs
+- No citations by default (unless requested)
+- Only use numbers from quant output
+- Keep concise and aligned with request
+
+**Outputs:**
+- `draft_response`: Initial answer text
+- `notes`: Drafting considerations
+
+---
+
+#### **7. AUDIT_FINAL_TASK** (Auditor Agent)
+**Purpose:** Validates complete response quality
+
+**Validates:**
+- Alignment between research + quant + draft
+- Completeness for user request
+- Compliance (no personalized advice, no guaranteed returns)
+- All claims backed by data
+
+**Returns:** APPROVED | REJECTED | PARTIAL
+
+---
+
+#### **8. FINAL_REPORT_TASK** (Planner Agent)
+**Purpose:** Produces final user-facing response
+
+**Receives:** ALL previous outputs including audit results
+
+**Formatting:**
+- Main answer: 2-3 paragraphs or bullet points
+- Conversational tone, direct answer
+- No section headers in main response
+- Separate sections for details:
+  - **Limitations:** Data gaps, caveats
+  - **Sources:** Citations if requested
+  - **Note/Disclaimer:** Important context
+
+**If audit REJECTED:**
+- Surfaces issues in Limitations section
+- Does not present results as approved
+- Explains what failed and why
+
+**Example Final Response (APPROVED):**
+```
+BMW sedan prices in 2026 start around $58,000 for the 530i base model, 
+with the M340i xDrive priced near $60,000. The top-tier 540i xDrive exceeds 
+$62,000. These are MSRP figures and may vary by region and dealer incentives.
+
+Limitations:
+- Prices reflect January 2026 estimates without accounting for local dealer 
+  incentives or taxes
+- Based on 2 sources; direct dealer quotes not available
+```
+
+**Example Final Response (REJECTED):**
+```
+I couldn't complete the full analysis due to data access issues.
+
+Limitations:
+- Research audit rejected: No valid citations found. Most URLs failed to load 
+  due to bot protection
+- Quant analysis skipped due to missing research data
+- Unable to provide price projections without fundamental data
+```
+
+---
+
+## What Happens When Audit Fails?
+
+### **No Automatic Reruns**
+The system is sequential, not a loop. If an audit fails:
+1. Audit marks the module as REJECTED or PARTIAL
+2. Lists specific issues with fix actions
+3. Workflow continues forward (no rerun)
+4. Final report receives the failed audit status
+5. Response surfaces the issues in Limitations section
+
+### **Three Audit Outcomes:**
+
+#### **APPROVED** ✅
+- All checks passed
+- Workflow proceeds smoothly
+- Minimal limitations (only disclaimers)
+- Results presented confidently
+
+#### **PARTIAL** ⚠️
+- Some data available but incomplete
+- Issues noted but not blocking
+- Workflow continues with available data
+- Response includes caveats about data gaps
+
+**Example:**
+```
+Based on limited data, AI infrastructure spending is growing...
+
+Limitations:
+- Only 1 source successfully accessed (2 URLs blocked)
+- Analysis based on partial data - may not reflect complete picture
+```
+
+#### **REJECTED** ❌
+- Critical failures detected
+- Module outputs unusable
+- Workflow continues but marks failure
+- Final response explains what went wrong
+
+**Example:**
+```
+Analysis incomplete due to data access issues.
+
+Limitations:
+- Research failed: No citations - all sources blocked by bot protection
+- Quant skipped: Cannot analyze without research context
+- Recommendation: Try again with different sources or timeframe
+```
+
+---
+
+## Context Flow (Task Dependencies)
+
+Each task receives **context** from previous tasks:
+- **Research** sees: Planner
+- **Audit_Research** sees: Planner, Research
+- **Quant** sees: Planner, Research, Audit_Research
+- **Audit_Quant** sees: Planner, Research, Audit_Research, Quant
+- **Final_Draft** sees: Planner, Research, Audit_Research, Quant, Audit_Quant
+- **Audit_Final** sees: All above + Final_Draft
+- **Final_Report** sees: **ALL 7 previous tasks**
+
+This enables rich validation and ensures nothing is lost or invented.
+
+---
+
+## Separation of Concerns
+
+1. **Planner** decides strategy (what to run, what parameters)
+2. **Specialized agents** execute their domain (research OR quant, not both)
+3. **Auditor** validates quality (independent quality gate)
+4. **Planner** synthesizes final output (has full context)
+
+This ensures **transparency** (failures documented), **quality** (multiple checkpoints), and **robustness** (partial data doesn't crash the system).
 - numeric_sanity_check (custom): range checks + missing-field checks.
 - cross_source_check: compare two data sources when available.
 - policy_lint (custom): bans "buy now", "guaranteed profit", etc., and enforces disclaimers.
@@ -120,46 +346,3 @@ Tools (3):
 - If REJECTED: Planner re-runs only the required portion (e.g., re-fetch data, re-compute RSI, fetch more recent news) and re-audits (bounded retries).
 - If APPROVED: Planner synthesizes the final brief.
 - If providers are unavailable: return news-only with explicit limitations.
-
-## Flask API (Mongo + FAISS)
-The UI expects a backend with these endpoints:
-- `GET /health` returns `{status:"ok"}`
-- `GET /history` returns a list of messages
-- `POST /chat` accepts `{message, threadId}` and returns `{reply, threadId}`
-- `GET /trace?threadId=...` returns human-readable trace events
-
-Run the API server:
-```bash
-uv run finance_insight_api --host 0.0.0.0 --port 5000
-```
-
-Or use the convenient startup script:
-```bash
-./run.sh
-```
-
-## UI Features
-
-The Next.js frontend includes:
-- **Real-time chat interface** for finance queries
-- **Trace viewer** - Click "View trace" while thinking to see agent execution steps
-- **Dark/light mode** toggle
-- **Conversation history** with semantic search
-- **Settings page** for API configuration
-
-### Why Separate Frontend/Backend?
-
-The frontend and backend are separate services because:
-
-1. **Technology Independence**: Backend uses Python/CrewAI for AI agents; frontend uses Next.js/React for modern UI
-2. **Scalability**: Can scale backend (compute-heavy) and frontend (serve static) independently
-3. **Development**: Teams can work on UI and AI logic separately
-4. **Deployment Flexibility**: 
-   - Backend can run on GPU servers
-   - Frontend can be deployed to CDN/edge networks
-5. **API-First Design**: Backend serves as an API for multiple clients (web, mobile, CLI)
-
-The `run.sh` script makes local development seamless by starting both together.
-
-Mongo stores threads/messages; FAISS stores semantic memory and is fed into
-`conversation_summary` for follow-ups.

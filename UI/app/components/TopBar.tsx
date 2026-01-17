@@ -4,8 +4,7 @@ export default function TopBar() {
   return (
     <header className="topbar">
       <div className="topbar-left">
-        <div className="brand-mark">💹</div>
-        <div className="topbar-title">Finance Insight</div>
+        {/* Empty - brand is in sidebar */}
       </div>
       <div className="topbar-center">
         <span className="pill pill-muted">Research Assistant</span>

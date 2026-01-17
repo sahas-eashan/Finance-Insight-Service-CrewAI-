@@ -149,15 +149,31 @@ export const sendMessage = async (
 ): Promise<ChatResponse> => {
   const { baseUrl, apiKey } = getApiConfig();
   
+  console.log('[API] Sending message to:', `${baseUrl}/chat`);
+  
   // Use fetch with streaming for POST
-  const response = await fetch(`${baseUrl}/chat`, {
-    method: "POST",
-    headers: buildHeaders(apiKey),
-    body: JSON.stringify({ message, threadId }),
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${baseUrl}/chat`, {
+      method: "POST",
+      headers: buildHeaders(apiKey),
+      body: JSON.stringify({ message, threadId }),
+    });
+  } catch (error) {
+    console.error('[API] Fetch error:', error);
+    throw new Error("Cannot connect to backend. Make sure the API server is running.");
+  }
 
   if (!response.ok) {
-    throw new Error("Failed to send message");
+    console.error('[API] Response not OK:', response.status, response.statusText);
+    throw new Error(`Server error: ${response.status} ${response.statusText}`);
+  }
+
+  const contentType = response.headers.get('content-type');
+  console.log('[API] Response content-type:', contentType);
+  
+  if (!contentType?.includes('text/event-stream')) {
+    console.warn('[API] Expected SSE stream but got:', contentType);
   }
 
   const reader = response.body?.getReader();
@@ -168,6 +184,7 @@ export const sendMessage = async (
   const decoder = new TextDecoder();
   const traces: any[] = [];
   let finalResponse: ChatResponse | null = null;
+  let buffer = '';
 
   try {
     while (true) {
@@ -175,16 +192,22 @@ export const sendMessage = async (
       if (done) break;
 
       const chunk = decoder.decode(value, { stream: true });
-      const lines = chunk.split('\n');
+      buffer += chunk;
+      
+      // Process complete lines
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || ''; // Keep incomplete line in buffer
 
       for (const line of lines) {
         if (line.startsWith('data: ')) {
           try {
             const data = JSON.parse(line.slice(6));
+            console.log('[SSE] Received:', data.type, data);
             
             if (data.type === "trace") {
               traces.push(data.detail);
               if (onTrace) {
+                console.log('[SSE] Calling onTrace with:', data.message);
                 onTrace(data.message, data.detail);
               }
             } else if (data.type === "response") {
@@ -198,9 +221,12 @@ export const sendMessage = async (
                 threadId: data.threadId,
                 traces: data.traces ?? traces,
               };
+            } else if (data.type === "error") {
+              console.error('[SSE] Error from server:', data.message);
+              throw new Error(data.message || "Server error");
             }
           } catch (e) {
-            // Ignore malformed JSON
+            console.error('[SSE] Failed to parse line:', line, e);
           }
         }
       }
@@ -210,9 +236,11 @@ export const sendMessage = async (
   }
 
   if (!finalResponse) {
+    console.error('[API] No response received from stream');
     throw new Error("No response received");
   }
 
+  console.log('[API] Final response:', finalResponse);
   return finalResponse;
 };
 
@@ -245,18 +273,25 @@ export const fetchTrace = async (threadId: string): Promise<any[]> => {
 };
 
 export const fetchThreads = async (): Promise<Thread[]> => {
-  const { baseUrl, apiKey } = getApiConfig();
-  const response = await fetch(`${baseUrl}/threads`, {
-    headers: buildHeaders(apiKey),
-    cache: "no-store",
-  });
+  try {
+    const { baseUrl, apiKey } = getApiConfig();
+    const response = await fetch(`${baseUrl}/threads`, {
+      headers: buildHeaders(apiKey),
+      cache: "no-store",
+    });
 
-  if (!response.ok) {
-    throw new Error("Failed to load threads");
+    if (!response.ok) {
+      console.error(`[API] Failed to fetch threads: ${response.status} ${response.statusText}`);
+      throw new Error("Failed to load threads");
+    }
+
+    const data = await response.json();
+    return Array.isArray(data) ? data : [];
+  } catch (error) {
+    console.error('[API] fetchThreads error:', error);
+    // Return empty array instead of throwing to prevent UI breakage
+    return [];
   }
-
-  const data = await response.json();
-  return Array.isArray(data) ? data : [];
 };
 
 export const fetchConfig = async (): Promise<ServiceCapabilities | null> => {

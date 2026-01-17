@@ -16,17 +16,20 @@ const primaryItems: {
 
 export default function Sidebar() {
   const [threads, setThreads] = useState<Thread[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const searchParams = useSearchParams();
 
   useEffect(() => {
     const loadThreads = async () => {
       try {
+        setError(null);
         const data = await fetchThreads();
-        console.log('Loaded threads:', data); // Debug log
+        console.log('[Sidebar] Loaded threads:', data);
         setThreads(data.slice(0, 15)); // Show last 15 conversations
       } catch (error) {
-        console.error("Failed to load threads:", error);
+        console.error("[Sidebar] Failed to load threads:", error);
+        setError(error instanceof Error ? error.message : 'Failed to load threads');
         setThreads([]); // Clear threads on error
       } finally {
         setLoading(false);

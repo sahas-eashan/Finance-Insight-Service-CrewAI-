@@ -2,12 +2,17 @@ research_news_task:
   description: >
     You are given a research request:
     User request: {user_request}
+    Current date: {current_date}
+    Current year: {current_year}
     Query: {query}
     Tickers: {tickers}
     Sites (optional): {sites}
     Lookback days: {days}
     Max articles: {max_articles}
     Search query: {search_query}
+
+    IMPORTANT: Today is {current_date} (year {current_year}). Use this as reference when
+    evaluating article recency and relevance. Focus on articles from recent months/years.
 
     Use SerperDevTool or SerpApiGoogleSearchTool to discover relevant articles
     with search_query. If tickers are provided, include them in the search terms.
@@ -69,7 +74,18 @@ quant_snapshot_task:
     Output size: {outputsize}
     Horizon days: {horizon_days}
     Request: {request}
+    Current date: {current_date}
+    Current year: {current_year}
     Provided data (optional): {provided_data}
+
+    IMPORTANT: Today is {current_date} (year {current_year}). Use this as your reference point
+    for all time-based analysis. If you need to verify or use dates in calculations, you can
+    confirm via safe_python_exec with datetime module.
+
+    CRITICAL FIRST STEP: If the Request mentions "today", "current", "now", or specific years,
+    you already know the current date is {current_date} and year is {current_year}.
+    Use these values in your analysis. You may optionally verify with safe_python_exec if needed:
+    Example code: import json; from datetime import datetime; print(json.dumps({"current_date": datetime.now().strftime("%Y-%m-%d"), "current_year": datetime.now().year, "current_month": datetime.now().month}))
 
     Decide which computations are needed based on the Request. Do not compute
     everything by default.
@@ -155,13 +171,24 @@ planner_task:
   description: >
     You are the Planner. Inputs:
     User request: {user_request}
+    Current date: {current_date}
+    Current year: {current_year}
     Conversation summary (optional): {conversation_summary}
     Runtime defaults (optional): {runtime_defaults}
     Sources requested by user (optional): {sources_requested}
 
+    IMPORTANT: Today is {current_date} (year {current_year}). Use this information to properly
+    contextualize the user's request, especially when they mention "today", "current", or specific years.
+
     Produce a plan and task requests only. Do not draft the final response here.
     Decide which modules are needed based on the request. Keep the plan well organized
     and concise.
+    
+    CRITICAL: If the user request mentions "today", "current", "now", or specific years (e.g., 2026),
+    ALWAYS set use_quant to true and add to quant_request.request:
+    "Current date is {current_date}. Get this confirmed via Python datetime if needed, then proceed with analysis."
+    This ensures all agents know what year/date it actually is before making decisions.
+    
     If you plan to use Research or Quant, set use_audit to true.
     For predictive requests, plan to use Research to gather relevant ratios,
     formulas, and contextual drivers, and use Quant to fetch market data and
@@ -307,15 +334,18 @@ final_report_task:
     - Only mention failed items in limitations; do not restate corrected failures.
 
     Formatting (human readable, concise):
-    - Use short section headers.
-    - Prefer bullets over long paragraphs.
-    - Recommended sections (include only what is available):
-      - Summary
-      - Snapshot (numbers)
-      - Scenarios (if computed)
-      - Stance (watch/monitor/avoid) + risks
-      - Limitations
+    - Keep the main response focused on answering the user's question directly.
+    - Use 2-3 short paragraphs or bullet points for the main answer.
+    - Do NOT include section headers like "Summary:" or "Snapshot:" in the main response.
+    - Write naturally and conversationally, as if speaking to the user.
+    - After the main answer, add additional details in separate sections:
+      * If there are important caveats or data gaps, add a "Limitations:" section.
+      * If sources were requested or are relevant, add a "Sources:" section.
+      * If there are important disclaimers, add a "Note:" or "Disclaimer:" section.
+    - These additional sections will be hidden behind a "More info" button in the UI.
+    - Keep the main response concise (2-4 sentences or 3-5 bullet points maximum).
+    - Make sure the main response stands alone and answers the user's question completely.
   expected_output: >
     Return strict JSON with these keys:
-    - final_response: string
+    - final_response: string (format: main answer, then Limitations:/Sources:/Note: sections if applicable)
     - notes: list of strings

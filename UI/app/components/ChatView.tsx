@@ -231,17 +231,27 @@ export default function ChatView() {
   const [showTrace, setShowTrace] = useState(false);
   const [currentTraces, setCurrentTraces] = useState<any[]>([]);
   const [liveMessages, setLiveMessages] = useState<string[]>([]);
+  // Track which thread is actively loading
+  const [loadingThreadId, setLoadingThreadId] = useState<string | undefined>();
   const router = useRouter();
   const searchParams = useSearchParams();
   const isNewSession = searchParams.get("new") === "1";
   const urlThreadId = searchParams.get("threadId");
 
   useEffect(() => {
-    // Clear any prior trace state when switching threads
-    setCurrentTraces([]);
-    setShowTrace(false);
-    setLiveMessages([]);
-  }, [urlThreadId]);
+    // When switching threads, check if this thread is the one loading
+    const viewThreadId = urlThreadId || 'new-chat';
+    const isThisThreadLoading = loadingThreadId === viewThreadId;
+    
+    setIsLoading(isThisThreadLoading);
+    
+    // Only clear traces when switching AWAY from the loading thread
+    if (!isThisThreadLoading && loadingThreadId) {
+      setCurrentTraces([]);
+      setLiveMessages([]);
+      setShowTrace(false);
+    }
+  }, [urlThreadId, loadingThreadId]);
 
   useEffect(() => {
     if (isNewSession) {
@@ -293,6 +303,11 @@ export default function ChatView() {
     setLiveMessages([]);
     setMessages((prev) => [...prev, createLocalMessage("user", content)]);
 
+    // Track which thread is loading - set it BEFORE the request starts
+    // Use current threadId or urlThreadId, or a temp ID for new chats
+    let activeThreadId = threadId || urlThreadId || 'new-chat';
+    setLoadingThreadId(activeThreadId);
+
     try {
       const response = await sendMessage(
         content,
@@ -311,9 +326,11 @@ export default function ChatView() {
       
       if (response.threadId) {
         setThreadId(response.threadId);
+        activeThreadId = response.threadId;
+        setLoadingThreadId(response.threadId);
       }
 
-      // Store traces from response (ephemeral, only for this session)
+      // Store traces from response
       if (response.traces) {
         setCurrentTraces(response.traces);
       }
@@ -343,6 +360,7 @@ export default function ChatView() {
       }
     } finally {
       setIsLoading(false);
+      setLoadingThreadId(undefined);
     }
   };
 
@@ -375,7 +393,7 @@ export default function ChatView() {
                 </div>
               );
             })}
-            {isLoading ? (
+            {isLoading && (loadingThreadId === urlThreadId || (loadingThreadId === 'new-chat' && !urlThreadId)) ? (
               <div className="thinking-container">
                 <span className="thinking-text">Thinking...</span>
                 {liveMessages.length > 0 && (

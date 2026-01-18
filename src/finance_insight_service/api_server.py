@@ -1193,11 +1193,13 @@ def create_app() -> Flask:
         
         # Start background job
         def run_job():
+            print(f"[JOB {job_id}] Starting background job")
             with jobs_lock:
                 jobs[job_id]["status"] = JobStatus.RUNNING
                 jobs[job_id]["updated_at"] = _utc_now().isoformat()
             
             try:
+                print(f"[JOB {job_id}] Adding user message")
                 # Add user message
                 user_message_id = store.add_message(thread_id, "user", message, {})
                 memory.add_message_embedding(user_message_id, thread_id, message)
@@ -1210,6 +1212,7 @@ def create_app() -> Flask:
                 trace_lock = threading.Lock()
 
                 def emit_trace(entry: dict[str, Any]) -> None:
+                    print(f"[JOB {job_id}] Trace: {entry.get('type')}")
                     with trace_lock:
                         traces.append(entry)
                         simple_msg = _simplify_trace(entry)
@@ -1224,32 +1227,46 @@ def create_app() -> Flask:
                             })
                             jobs[job_id]["updated_at"] = _utc_now().isoformat()
 
-                # Register event handlers
-                @crewai_event_bus.on(CrewKickoffStartedEvent)
-                def _crew_started(_source, _event):
-                    emit_trace({"type": "crew_started", "summary": "Crew execution started"})
-
-                @crewai_event_bus.on(CrewKickoffCompletedEvent)
-                def _crew_completed(_source, _event):
-                    emit_trace({"type": "crew_completed", "summary": "Crew execution completed"})
-
-                @crewai_event_bus.on(TaskStartedEvent)
-                def _task_started(_source, event):
-                    task_name = getattr(event.task, "name", None) or "task"
-                    agent = getattr(getattr(event.task, "agent", None), "role", None)
-                    emit_trace({"type": "task_started", "task": task_name, "agent": agent, "summary": f"Started {task_name}"})
-
-                @crewai_event_bus.on(TaskCompletedEvent)
-                def _task_completed(_source, event):
-                    task_name = getattr(event.task, "name", None) or "task"
-                    agent = getattr(getattr(event.task, "agent", None), "role", None)
-                    emit_trace({"type": "task_completed", "task": task_name, "agent": agent, "summary": f"Completed {task_name}"})
-
+                print(f"[JOB {job_id}] Building crew")
                 # Execute crew
                 inputs = _build_inputs(payload, conversation_summary)
+                
+                print(f"[JOB {job_id}] Executing crew.kickoff()")
                 with run_lock:
                     crew = FinanceInsightCrew().build_crew()
-                    result = crew.kickoff(inputs=inputs)
+                    
+                    # Add callback to collect events
+                    original_events = []
+                    def event_callback(event):
+                        print(f"[JOB {job_id}] Event received: {type(event).__name__}")
+                        original_events.append(event)
+                        # Emit trace based on event type
+                        if isinstance(event, CrewKickoffStartedEvent):
+                            emit_trace({"type": "crew_started", "summary": "Crew execution started"})
+                        elif isinstance(event, CrewKickoffCompletedEvent):
+                            emit_trace({"type": "crew_completed", "summary": "Crew execution completed"})
+                        elif isinstance(event, TaskStartedEvent):
+                            task_name = getattr(event.task, "name", None) or "task"
+                            agent = getattr(getattr(event.task, "agent", None), "role", None)
+                            emit_trace({"type": "task_started", "task": task_name, "agent": agent, "summary": f"Started {task_name}"})
+                        elif isinstance(event, TaskCompletedEvent):
+                            task_name = getattr(event.task, "name", None) or "task"
+                            agent = getattr(getattr(event.task, "agent", None), "role", None)
+                            emit_trace({"type": "task_completed", "task": task_name, "agent": agent, "summary": f"Completed {task_name}"})
+                    
+                    # Subscribe to all events temporarily
+                    unsub_list = []
+                    for event_cls in [CrewKickoffStartedEvent, CrewKickoffCompletedEvent, TaskStartedEvent, TaskCompletedEvent]:
+                        unsub = crewai_event_bus.on(event_cls)(lambda src, evt, cls=event_cls: event_callback(evt))
+                        unsub_list.append(unsub)
+                    
+                    try:
+                        result = crew.kickoff(inputs=inputs)
+                    finally:
+                        # Unsubscribe
+                        for unsub in unsub_list:
+                            if callable(unsub):
+                                unsub()
 
                 # Extract and save response
                 final_response, raw_output = _extract_final_response(result)

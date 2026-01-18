@@ -761,17 +761,8 @@ def create_app() -> Flask:
     mongo_uri = os.getenv("MONGO_URI", "mongodb://localhost:27017")
     mongo_db = os.getenv("MONGO_DB", "finance_insight")
     api_key = os.getenv("API_KEY", "")
-    
-    # Try to connect to MongoDB, but make it optional
-    try:
-        store = MongoStore(mongo_uri, mongo_db)
-        memory = MemoryManager(store)
-        print(f"✓ Connected to MongoDB at {mongo_uri}")
-    except Exception as e:
-        print(f"⚠ MongoDB connection failed: {e}. Running without persistent storage.")
-        store = None
-        memory = None
-    
+    store = MongoStore(mongo_uri, mongo_db)
+    memory = MemoryManager(store)
     run_lock = threading.Lock()
 
     def check_auth() -> bool:
@@ -1076,40 +1067,58 @@ def create_app() -> Flask:
             
             # Check for errors
             if 'error' in execution_result:
+                print(f"[STREAM] Crew execution error: {execution_result['error']}")
                 yield f"data: {json.dumps({'type': 'error', 'message': execution_result['error']})}\n\n"
                 return
             
             result = execution_result.get('result')
             if not result:
+                print("[STREAM] No result from crew execution")
                 yield f"data: {json.dumps({'type': 'error', 'message': 'No result from crew'})}\n\n"
                 return
 
-            # Extract and save response
-            final_response, raw_output = _extract_final_response(result)
-            assistant_text = final_response or str(raw_output)
-            assistant_id = store.add_message(thread_id, "assistant", assistant_text, {})
-            memory.add_message_embedding(assistant_id, thread_id, assistant_text)
-
-            # Send final response
-            trace_payload = [
-                {
-                    "type": event.get("type"),
-                    "agent": event.get("agent"),
-                    "task": event.get("task"),
-                    "tool": event.get("tool"),
-                    "output": event.get("output"),
-                    "summary": event.get("summary"),
-                }
-                for event in traces
-            ]
-            
-            final_data = json.dumps({
-                "type": "response",
-                "reply": assistant_text,
-                "threadId": thread_id,
-                "traces": trace_payload,
-            })
-            yield f"data: {final_data}\n\n"
+            print("[STREAM] Extracting final response")
+            # Extract and save response  
+            try:
+                final_response, raw_output = _extract_final_response(result)
+                assistant_text = final_response or str(raw_output)
+                print(f"[STREAM] Assistant response length: {len(assistant_text)} chars")
+                
+                print("[STREAM] Saving to MongoDB")
+                assistant_id = store.add_message(thread_id, "assistant", assistant_text, {})
+                print(f"[STREAM] Message saved with ID: {assistant_id}")
+                
+                print("[STREAM] Adding embedding")
+                memory.add_message_embedding(assistant_id, thread_id, assistant_text)
+                print("[STREAM] Embedding added")
+                
+                # Send final response
+                trace_payload = [
+                    {
+                        "type": event.get("type"),
+                        "agent": event.get("agent"),
+                        "task": event.get("task"),
+                        "tool": event.get("tool"),
+                        "output": event.get("output"),
+                        "summary": event.get("summary"),
+                    }
+                    for event in traces
+                ]
+                
+                final_data = json.dumps({
+                    "type": "response",
+                    "reply": assistant_text,
+                    "threadId": thread_id,
+                    "traces": trace_payload,
+                })
+                print(f"[STREAM] Sending final response, payload size: {len(final_data)} bytes")
+                yield f"data: {final_data}\n\n"
+                print("[STREAM] Final response sent successfully")
+            except Exception as e:
+                print(f"[STREAM] Error preparing final response: {e}")
+                import traceback
+                traceback.print_exc()
+                yield f"data: {json.dumps({'type': 'error', 'message': f'Error preparing response: {str(e)}'})}\n\n"
 
         return app.response_class(
             generate_stream(),

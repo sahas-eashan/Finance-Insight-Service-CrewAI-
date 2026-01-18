@@ -45,7 +45,7 @@ export type ServiceCapabilities = {
 
 const STORAGE_KEY = "agentSettings";
 export const DEFAULT_API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:5000";
+  process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://default.localhost:9080/financeinsightservice";
 
 const createId = () =>
   typeof crypto !== "undefined" && "randomUUID" in crypto
@@ -189,7 +189,10 @@ export const sendMessage = async (
   try {
     while (true) {
       const { done, value } = await reader.read();
-      if (done) break;
+      if (done) {
+        console.log('[SSE] Stream ended, processing remaining buffer');
+        break;
+      }
 
       const chunk = decoder.decode(value, { stream: true });
       buffer += chunk;
@@ -221,6 +224,7 @@ export const sendMessage = async (
                 threadId: data.threadId,
                 traces: data.traces ?? traces,
               };
+              console.log('[SSE] Final response received:', finalResponse.threadId);
             } else if (data.type === "error") {
               console.error('[SSE] Error from server:', data.message);
               throw new Error(data.message || "Server error");
@@ -231,13 +235,44 @@ export const sendMessage = async (
         }
       }
     }
+    
+    // Process any remaining data in buffer (in case stream closed abruptly)
+    if (buffer.trim()) {
+      console.log('[SSE] Processing remaining buffer:', buffer.substring(0, 100));
+      const lines = buffer.split('\n');
+      for (const line of lines) {
+        if (line.startsWith('data: ')) {
+          try {
+            const data = JSON.parse(line.slice(6));
+            console.log('[SSE] Final buffer parse:', data.type);
+            if (data.type === "response" && !finalResponse) {
+              const normalizedMessages = (data.messages ?? []).map(
+                (entry: any) => normalizeMessage(entry, "assistant"),
+              );
+              finalResponse = {
+                reply: data.reply ?? "",
+                messages: normalizedMessages.length ? normalizedMessages : undefined,
+                threadId: data.threadId,
+                traces: data.traces ?? traces,
+              };
+              console.log('[SSE] Final response from buffer:', finalResponse.threadId);
+            }
+          } catch (e) {
+            console.error('[SSE] Failed to parse buffer line:', line.substring(0, 50), e);
+          }
+        }
+      }
+    }
+  } catch (error) {
+    console.error('[SSE] Stream error:', error);
+    // Don't throw - we might have received the response already
   } finally {
     reader.releaseLock();
   }
 
   if (!finalResponse) {
-    console.error('[API] No response received from stream');
-    throw new Error("No response received");
+    console.error('[API] No response received from stream, traces collected:', traces.length);
+    throw new Error("No response received from server. The analysis completed but the final result was not delivered. Please check the server logs.");
   }
 
   console.log('[API] Final response:', finalResponse);

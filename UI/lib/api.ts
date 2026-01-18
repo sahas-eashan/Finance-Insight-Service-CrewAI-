@@ -207,7 +207,11 @@ export const sendMessage = async (
             const data = JSON.parse(line.slice(6));
             console.log('[SSE] Received:', data.type, data);
             
-            if (data.type === "trace") {
+            if (data.type === "heartbeat") {
+              // Ignore heartbeat messages - they're just to keep connection alive
+              console.log('[SSE] Heartbeat received:', data.count);
+              continue;
+            } else if (data.type === "trace") {
               traces.push(data.detail);
               if (onTrace) {
                 console.log('[SSE] Calling onTrace with:', data.message);

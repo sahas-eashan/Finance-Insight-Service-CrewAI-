@@ -1042,7 +1042,7 @@ def create_app() -> Flask:
             events_sent = 0
             keepalive_counter = 0
             last_event_time = time.time()
-            KEEPALIVE_INTERVAL = 15  # Send keepalive every 15 seconds
+            KEEPALIVE_INTERVAL = 10  # Send keepalive every 10 seconds
             
             while not execution_complete.is_set():
                 with lock:
@@ -1053,13 +1053,14 @@ def create_app() -> Flask:
                         print(f"[STREAM] Yielding event #{events_sent}")
                         yield event
                 
-                # Send keepalive if no events for KEEPALIVE_INTERVAL seconds
+                # Send keepalive as data event if no events for KEEPALIVE_INTERVAL seconds
                 current_time = time.time()
                 if current_time - last_event_time > KEEPALIVE_INTERVAL:
                     keepalive_counter += 1
                     last_event_time = current_time
-                    keepalive_msg = f": keepalive {keepalive_counter}\n\n"
-                    print(f"[STREAM] Sending keepalive #{keepalive_counter}")
+                    # Send as data event so proxies recognize it as activity
+                    keepalive_msg = f"data: {json.dumps({'type': 'heartbeat', 'count': keepalive_counter})}\n\n"
+                    print(f"[STREAM] Sending heartbeat #{keepalive_counter}")
                     yield keepalive_msg
                 
                 execution_complete.wait(timeout=0.5)  # Check every 500ms

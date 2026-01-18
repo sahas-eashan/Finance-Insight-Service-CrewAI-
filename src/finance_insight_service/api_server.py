@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import threading
+import time
 from datetime import datetime
 from typing import Any
 
@@ -1037,16 +1038,31 @@ def create_app() -> Flask:
             crew_thread.start()
             print("[STREAM] Crew thread started, beginning event polling")
             
-            # Stream events as they come in
+            # Stream events as they come in with keepalive
             events_sent = 0
+            keepalive_counter = 0
+            last_event_time = time.time()
+            KEEPALIVE_INTERVAL = 15  # Send keepalive every 15 seconds
+            
             while not execution_complete.is_set():
                 with lock:
                     while events_to_send:
                         event = events_to_send.pop(0)
                         events_sent += 1
+                        last_event_time = time.time()
                         print(f"[STREAM] Yielding event #{events_sent}")
                         yield event
-                execution_complete.wait(timeout=0.1)  # Check every 100ms
+                
+                # Send keepalive if no events for KEEPALIVE_INTERVAL seconds
+                current_time = time.time()
+                if current_time - last_event_time > KEEPALIVE_INTERVAL:
+                    keepalive_counter += 1
+                    last_event_time = current_time
+                    keepalive_msg = f": keepalive {keepalive_counter}\n\n"
+                    print(f"[STREAM] Sending keepalive #{keepalive_counter}")
+                    yield keepalive_msg
+                
+                execution_complete.wait(timeout=0.5)  # Check every 500ms
             
             print(f"[STREAM] Execution complete, sending remaining events")
             # Yield any remaining events

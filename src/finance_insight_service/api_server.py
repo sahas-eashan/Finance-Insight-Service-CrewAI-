@@ -1010,10 +1010,6 @@ def create_app() -> Flask:
             inputs = _build_inputs(payload, conversation_summary)
             print(f"[STREAM] Starting crew execution with inputs: {list(inputs.keys())}")
             
-            # Send a test trace to verify streaming works
-            print("[STREAM] Sending test trace")
-            emit_trace({"type": "crew_started", "summary": "Starting analysis"})
-            
             # Flag to track completion
             execution_complete = threading.Event()
             execution_result = {}

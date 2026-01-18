@@ -761,8 +761,17 @@ def create_app() -> Flask:
     mongo_uri = os.getenv("MONGO_URI", "mongodb://localhost:27017")
     mongo_db = os.getenv("MONGO_DB", "finance_insight")
     api_key = os.getenv("API_KEY", "")
-    store = MongoStore(mongo_uri, mongo_db)
-    memory = MemoryManager(store)
+    
+    # Try to connect to MongoDB, but make it optional
+    try:
+        store = MongoStore(mongo_uri, mongo_db)
+        memory = MemoryManager(store)
+        print(f"✓ Connected to MongoDB at {mongo_uri}")
+    except Exception as e:
+        print(f"⚠ MongoDB connection failed: {e}. Running without persistent storage.")
+        store = None
+        memory = None
+    
     run_lock = threading.Lock()
 
     def check_auth() -> bool:

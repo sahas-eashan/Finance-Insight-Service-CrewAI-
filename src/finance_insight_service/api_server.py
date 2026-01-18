@@ -1257,7 +1257,11 @@ def create_app() -> Flask:
                     # Subscribe to all events temporarily
                     unsub_list = []
                     for event_cls in [CrewKickoffStartedEvent, CrewKickoffCompletedEvent, TaskStartedEvent, TaskCompletedEvent]:
-                        unsub = crewai_event_bus.on(event_cls)(lambda src, evt, cls=event_cls: event_callback(evt))
+                        def make_handler(evt_class):
+                            def handler(src, evt):
+                                event_callback(evt)
+                            return handler
+                        unsub = crewai_event_bus.on(event_cls)(make_handler(event_cls))
                         unsub_list.append(unsub)
                     
                     try:

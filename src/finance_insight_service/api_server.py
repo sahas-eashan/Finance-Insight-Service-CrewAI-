@@ -17,6 +17,9 @@ from openai import OpenAI
 from pymongo import MongoClient, ReturnDocument
 from bson import ObjectId
 
+# Disable CrewAI interactive tracing prompt that causes timeout in containerized environments
+os.environ.setdefault("CREWAI_TRACING_ENABLED", "false")
+
 from crewai.events import (
     CrewKickoffCompletedEvent,
     CrewKickoffFailedEvent,

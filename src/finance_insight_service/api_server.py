@@ -1236,10 +1236,8 @@ def create_app() -> Flask:
                     crew = FinanceInsightCrew().build_crew()
                     
                     # Add callback to collect events
-                    original_events = []
                     def event_callback(event):
                         print(f"[JOB {job_id}] Event received: {type(event).__name__}")
-                        original_events.append(event)
                         # Emit trace based on event type
                         if isinstance(event, CrewKickoffStartedEvent):
                             emit_trace({"type": "crew_started", "summary": "Crew execution started"})
@@ -1255,22 +1253,13 @@ def create_app() -> Flask:
                             emit_trace({"type": "task_completed", "task": task_name, "agent": agent, "summary": f"Completed {task_name}"})
                     
                     # Subscribe to all events temporarily
-                    unsub_list = []
-                    for event_cls in [CrewKickoffStartedEvent, CrewKickoffCompletedEvent, TaskStartedEvent, TaskCompletedEvent]:
-                        def make_handler(evt_class):
-                            def handler(src, evt):
-                                event_callback(evt)
-                            return handler
-                        unsub = crewai_event_bus.on(event_cls)(make_handler(event_cls))
-                        unsub_list.append(unsub)
+                    def handler_wrapper(src, evt):
+                        event_callback(evt)
                     
-                    try:
-                        result = crew.kickoff(inputs=inputs)
-                    finally:
-                        # Unsubscribe
-                        for unsub in unsub_list:
-                            if callable(unsub):
-                                unsub()
+                    for event_cls in [CrewKickoffStartedEvent, CrewKickoffCompletedEvent, TaskStartedEvent, TaskCompletedEvent]:
+                        crewai_event_bus.on(event_cls)(handler_wrapper)
+                    
+                    result = crew.kickoff(inputs=inputs)
 
                 # Extract and save response
                 final_response, raw_output = _extract_final_response(result)

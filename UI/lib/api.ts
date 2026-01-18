@@ -149,12 +149,12 @@ export const sendMessage = async (
 ): Promise<ChatResponse> => {
   const { baseUrl, apiKey } = getApiConfig();
   
-  console.log('[API] Sending message to:', `${baseUrl}/chat`);
+  console.log('[API] Starting async job:', `${baseUrl}/chat/async`);
   
-  // Use fetch with streaming for POST
-  let response: Response;
+  // Start async job
+  let startResponse: Response;
   try {
-    response = await fetch(`${baseUrl}/chat`, {
+    startResponse = await fetch(`${baseUrl}/chat/async`, {
       method: "POST",
       headers: buildHeaders(apiKey),
       body: JSON.stringify({ message, threadId }),
@@ -164,123 +164,81 @@ export const sendMessage = async (
     throw new Error("Cannot connect to backend. Make sure the API server is running.");
   }
 
-  if (!response.ok) {
-    console.error('[API] Response not OK:', response.status, response.statusText);
-    throw new Error(`Server error: ${response.status} ${response.statusText}`);
+  if (!startResponse.ok) {
+    console.error('[API] Response not OK:', startResponse.status, startResponse.statusText);
+    throw new Error(`Server error: ${startResponse.status} ${startResponse.statusText}`);
   }
 
-  const contentType = response.headers.get('content-type');
-  console.log('[API] Response content-type:', contentType);
-  
-  if (!contentType?.includes('text/event-stream')) {
-    console.warn('[API] Expected SSE stream but got:', contentType);
-  }
+  const startData = await startResponse.json();
+  const { jobId, threadId: actualThreadId } = startData;
+  console.log('[API] Job started:', jobId, 'thread:', actualThreadId);
 
-  const reader = response.body?.getReader();
-  if (!reader) {
-    throw new Error("No response stream");
-  }
+  // Poll for status
+  const seenTraces = new Set<string>();
+  let lastTraceCount = 0;
 
-  const decoder = new TextDecoder();
-  const traces: any[] = [];
-  let finalResponse: ChatResponse | null = null;
-  let buffer = '';
-
-  try {
+  const pollStatus = async (): Promise<ChatResponse> => {
     while (true) {
-      const { done, value } = await reader.read();
-      if (done) {
-        console.log('[SSE] Stream ended, processing remaining buffer');
-        break;
-      }
+      await new Promise(resolve => setTimeout(resolve, 2000)); // Poll every 2 seconds
 
-      const chunk = decoder.decode(value, { stream: true });
-      buffer += chunk;
-      
-      // Process complete lines
-      const lines = buffer.split('\n');
-      buffer = lines.pop() || ''; // Keep incomplete line in buffer
+      try {
+        const statusResponse = await fetch(`${baseUrl}/chat/async/${jobId}/status`, {
+          headers: buildHeaders(apiKey),
+        });
 
-      for (const line of lines) {
-        if (line.startsWith('data: ')) {
-          try {
-            const data = JSON.parse(line.slice(6));
-            console.log('[SSE] Received:', data.type, data);
-            
-            if (data.type === "heartbeat") {
-              // Ignore heartbeat messages - they're just to keep connection alive
-              console.log('[SSE] Heartbeat received:', data.count);
-              continue;
-            } else if (data.type === "trace") {
-              traces.push(data.detail);
-              if (onTrace) {
-                console.log('[SSE] Calling onTrace with:', data.message);
-                onTrace(data.message, data.detail);
-              }
-            } else if (data.type === "response") {
-              const normalizedMessages = (data.messages ?? []).map(
-                (entry: any) => normalizeMessage(entry, "assistant"),
-              );
-              
-              finalResponse = {
-                reply: data.reply ?? "",
-                messages: normalizedMessages.length ? normalizedMessages : undefined,
-                threadId: data.threadId,
-                traces: data.traces ?? traces,
-              };
-              console.log('[SSE] Final response received:', finalResponse.threadId);
-            } else if (data.type === "error") {
-              console.error('[SSE] Error from server:', data.message);
-              throw new Error(data.message || "Server error");
-            }
-          } catch (e) {
-            console.error('[SSE] Failed to parse line:', line, e);
-          }
+        if (!statusResponse.ok) {
+          console.error('[API] Status check failed:', statusResponse.status);
+          throw new Error(`Failed to check job status: ${statusResponse.status}`);
         }
+
+        const statusData = await statusResponse.json();
+        console.log('[API] Job status:', statusData.status, 'traces:', statusData.traceCount);
+
+        // Emit new traces
+        if (onTrace && statusData.traces) {
+          for (const trace of statusData.traces) {
+            const traceKey = `${trace.timestamp}-${trace.message}`;
+            if (!seenTraces.has(traceKey) && statusData.traceCount > lastTraceCount) {
+              seenTraces.add(traceKey);
+              onTrace(trace.message, trace);
+            }
+          }
+          lastTraceCount = statusData.traceCount;
+        }
+
+        // Check if job is complete
+        if (statusData.status === 'completed' || statusData.status === 'failed') {
+          console.log('[API] Job finished:', statusData.status);
+          
+          // Get final result
+          const resultResponse = await fetch(`${baseUrl}/chat/async/${jobId}/result`, {
+            headers: buildHeaders(apiKey),
+          });
+
+          if (!resultResponse.ok) {
+            const errorData = await resultResponse.json().catch(() => ({ error: 'Unknown error' }));
+            console.error('[API] Result fetch failed:', errorData);
+            throw new Error(errorData.error || 'Failed to get result');
+          }
+
+          const resultData = await resultResponse.json();
+          console.log('[API] Final result received');
+
+          return {
+            reply: resultData.result?.reply ?? "",
+            threadId: actualThreadId,
+            traces: resultData.traces ?? [],
+          };
+        }
+
+      } catch (error) {
+        console.error('[API] Polling error:', error);
+        throw error;
       }
     }
-    
-    // Process any remaining data in buffer (in case stream closed abruptly)
-    if (buffer.trim()) {
-      console.log('[SSE] Processing remaining buffer:', buffer.substring(0, 100));
-      const lines = buffer.split('\n');
-      for (const line of lines) {
-        if (line.startsWith('data: ')) {
-          try {
-            const data = JSON.parse(line.slice(6));
-            console.log('[SSE] Final buffer parse:', data.type);
-            if (data.type === "response" && !finalResponse) {
-              const normalizedMessages = (data.messages ?? []).map(
-                (entry: any) => normalizeMessage(entry, "assistant"),
-              );
-              finalResponse = {
-                reply: data.reply ?? "",
-                messages: normalizedMessages.length ? normalizedMessages : undefined,
-                threadId: data.threadId,
-                traces: data.traces ?? traces,
-              };
-              console.log('[SSE] Final response from buffer:', finalResponse.threadId);
-            }
-          } catch (e) {
-            console.error('[SSE] Failed to parse buffer line:', line.substring(0, 50), e);
-          }
-        }
-      }
-    }
-  } catch (error) {
-    console.error('[SSE] Stream error:', error);
-    // Don't throw - we might have received the response already
-  } finally {
-    reader.releaseLock();
-  }
+  };
 
-  if (!finalResponse) {
-    console.error('[API] No response received from stream, traces collected:', traces.length);
-    throw new Error("No response received from server. The analysis completed but the final result was not delivered. Please check the server logs.");
-  }
-
-  console.log('[API] Final response:', finalResponse);
-  return finalResponse;
+  return await pollStatus();
 };
 
 export const testConnection = async (config?: ApiConfig): Promise<boolean> => {

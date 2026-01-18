@@ -5,8 +5,10 @@ import json
 import os
 import threading
 import time
+import uuid
 from datetime import datetime
 from typing import Any
+from enum import Enum
 
 import faiss
 import numpy as np
@@ -33,6 +35,18 @@ from crewai.events import (
     crewai_event_bus,
 )
 from finance_insight_service.crew import FinanceInsightCrew
+
+
+class JobStatus(str, Enum):
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+# In-memory job storage (for production, use Redis or database)
+jobs = {}
+jobs_lock = threading.Lock()
 
 
 def _utc_now() -> datetime:
@@ -1144,6 +1158,165 @@ def create_app() -> Flask:
                 "X-Accel-Buffering": "no",
             }
         )
+
+    # ============= NEW ASYNC JOB-BASED ENDPOINTS =============
+    
+    @app.post("/chat/async")
+    def chat_async():
+        """Start async chat job and return job ID immediately."""
+        payload = request.get_json(force=True) or {}
+        message = str(payload.get("message", "")).strip()
+        if not message:
+            return jsonify({"error": "Empty message"}), 400
+
+        thread_id = str(payload.get("threadId", "")).strip()
+        if thread_id and not store.get_thread(thread_id):
+            thread_id = ""
+        if not thread_id:
+            thread_id = store.create_thread(message[:60])
+
+        # Create job
+        job_id = str(uuid.uuid4())
+        
+        with jobs_lock:
+            jobs[job_id] = {
+                "id": job_id,
+                "status": JobStatus.PENDING,
+                "thread_id": thread_id,
+                "message": message,
+                "traces": [],
+                "result": None,
+                "error": None,
+                "created_at": _utc_now().isoformat(),
+                "updated_at": _utc_now().isoformat(),
+            }
+        
+        # Start background job
+        def run_job():
+            with jobs_lock:
+                jobs[job_id]["status"] = JobStatus.RUNNING
+                jobs[job_id]["updated_at"] = _utc_now().isoformat()
+            
+            try:
+                # Add user message
+                user_message_id = store.add_message(thread_id, "user", message, {})
+                memory.add_message_embedding(user_message_id, thread_id, message)
+
+                conversation_summary = memory.build_summary(thread_id, message)
+                store.update_thread_summary(thread_id, conversation_summary)
+
+                # Setup trace collection
+                traces: list[dict[str, Any]] = []
+                trace_lock = threading.Lock()
+
+                def emit_trace(entry: dict[str, Any]) -> None:
+                    with trace_lock:
+                        traces.append(entry)
+                        simple_msg = _simplify_trace(entry)
+                        with jobs_lock:
+                            jobs[job_id]["traces"].append({
+                                "type": entry.get("type"),
+                                "message": simple_msg,
+                                "agent": entry.get("agent"),
+                                "task": entry.get("task"),
+                                "tool": entry.get("tool"),
+                                "timestamp": _utc_now().isoformat(),
+                            })
+                            jobs[job_id]["updated_at"] = _utc_now().isoformat()
+
+                # Register event handlers
+                @crewai_event_bus.on(CrewKickoffStartedEvent)
+                def _crew_started(_source, _event):
+                    emit_trace({"type": "crew_started", "summary": "Crew execution started"})
+
+                @crewai_event_bus.on(CrewKickoffCompletedEvent)
+                def _crew_completed(_source, _event):
+                    emit_trace({"type": "crew_completed", "summary": "Crew execution completed"})
+
+                @crewai_event_bus.on(TaskStartedEvent)
+                def _task_started(_source, event):
+                    task_name = getattr(event.task, "name", None) or "task"
+                    agent = getattr(getattr(event.task, "agent", None), "role", None)
+                    emit_trace({"type": "task_started", "task": task_name, "agent": agent, "summary": f"Started {task_name}"})
+
+                @crewai_event_bus.on(TaskCompletedEvent)
+                def _task_completed(_source, event):
+                    task_name = getattr(event.task, "name", None) or "task"
+                    agent = getattr(getattr(event.task, "agent", None), "role", None)
+                    emit_trace({"type": "task_completed", "task": task_name, "agent": agent, "summary": f"Completed {task_name}"})
+
+                # Execute crew
+                inputs = _build_inputs(payload, conversation_summary)
+                with run_lock:
+                    crew = FinanceInsightCrew().build_crew()
+                    result = crew.kickoff(inputs=inputs)
+
+                # Extract and save response
+                final_response, raw_output = _extract_final_response(result)
+                assistant_text = final_response or str(raw_output)
+                assistant_id = store.add_message(thread_id, "assistant", assistant_text, {})
+                memory.add_message_embedding(assistant_id, thread_id, assistant_text)
+
+                # Update job with result
+                with jobs_lock:
+                    jobs[job_id]["status"] = JobStatus.COMPLETED
+                    jobs[job_id]["result"] = {
+                        "reply": assistant_text,
+                        "threadId": thread_id,
+                    }
+                    jobs[job_id]["updated_at"] = _utc_now().isoformat()
+
+            except Exception as e:
+                print(f"[JOB {job_id}] Error: {e}")
+                import traceback
+                traceback.print_exc()
+                with jobs_lock:
+                    jobs[job_id]["status"] = JobStatus.FAILED
+                    jobs[job_id]["error"] = str(e)
+                    jobs[job_id]["updated_at"] = _utc_now().isoformat()
+
+        thread = threading.Thread(target=run_job, daemon=True)
+        thread.start()
+
+        return jsonify({"jobId": job_id, "threadId": thread_id, "status": JobStatus.PENDING})
+
+    @app.get("/chat/async/<job_id>/status")
+    def get_job_status(job_id: str):
+        """Get job status and latest traces."""
+        with jobs_lock:
+            job = jobs.get(job_id)
+            if not job:
+                return jsonify({"error": "Job not found"}), 404
+            
+            return jsonify({
+                "jobId": job["id"],
+                "status": job["status"],
+                "threadId": job["thread_id"],
+                "traces": job["traces"][-10:],  # Last 10 traces
+                "traceCount": len(job["traces"]),
+                "updatedAt": job["updated_at"],
+            })
+
+    @app.get("/chat/async/<job_id>/result")
+    def get_job_result(job_id: str):
+        """Get final job result."""
+        with jobs_lock:
+            job = jobs.get(job_id)
+            if not job:
+                return jsonify({"error": "Job not found"}), 404
+            
+            if job["status"] == JobStatus.PENDING or job["status"] == JobStatus.RUNNING:
+                return jsonify({"error": "Job not yet completed", "status": job["status"]}), 425
+            
+            if job["status"] == JobStatus.FAILED:
+                return jsonify({"error": job["error"], "status": job["status"]}), 500
+            
+            return jsonify({
+                "jobId": job["id"],
+                "status": job["status"],
+                "result": job["result"],
+                "traces": job["traces"],
+            })
 
     return app
 

@@ -45,7 +45,7 @@ export type ServiceCapabilities = {
 
 const STORAGE_KEY = "agentSettings";
 export const DEFAULT_API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://default.localhost:9080/financeinsightservice";
+  process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://default.localhost:9080/financeinsight";
 
 const createId = () =>
   typeof crypto !== "undefined" && "randomUUID" in crypto

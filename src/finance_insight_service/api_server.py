@@ -781,7 +781,6 @@ def create_app() -> Flask:
     api_key = os.getenv("API_KEY", "")
     store = MongoStore(mongo_uri, mongo_db)
     memory = MemoryManager(store)
-    run_lock = threading.Lock()
 
     def check_auth() -> bool:
         if not api_key:
@@ -1035,12 +1034,11 @@ def create_app() -> Flask:
             def run_crew():
                 try:
                     print("[CREW] Starting crew thread")
-                    with run_lock:
-                        crew = FinanceInsightCrew().build_crew()
-                        print("[CREW] Crew built, starting kickoff")
-                        result = crew.kickoff(inputs=inputs)
-                        execution_result['result'] = result
-                        print("[CREW] Crew execution completed successfully")
+                    crew = FinanceInsightCrew().build_crew()
+                    print("[CREW] Crew built, starting kickoff")
+                    result = crew.kickoff(inputs=inputs)
+                    execution_result['result'] = result
+                    print("[CREW] Crew execution completed successfully")
                 except Exception as e:
                     print(f"[CREW] Error during execution: {e}")
                     import traceback
@@ -1232,8 +1230,7 @@ def create_app() -> Flask:
                 inputs = _build_inputs(payload, conversation_summary)
                 
                 print(f"[JOB {job_id}] Executing crew.kickoff()")
-                with run_lock:
-                    crew = FinanceInsightCrew().build_crew()
+                crew = FinanceInsightCrew().build_crew()
                     
                     # Add callback to collect events
                     def event_callback(event):

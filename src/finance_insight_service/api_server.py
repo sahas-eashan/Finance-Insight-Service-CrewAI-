@@ -1355,8 +1355,6 @@ def create_app() -> Flask:
             del jobs[job_id]
             
             return jsonify(result)
-                "traces": job["traces"],
-            })
 
     return app
 

@@ -1285,6 +1285,15 @@ def create_app() -> Flask:
                         "threadId": thread_id,
                     }
                     jobs[job_id]["updated_at"] = _utc_now().isoformat()
+                
+                # Clean up large objects to free memory
+                print(f"[JOB {job_id}] Cleaning up memory")
+                del crew
+                del result
+                del traces
+                del conversation_summary
+                import gc
+                gc.collect()
 
             except Exception as e:
                 print(f"[JOB {job_id}] Error: {e}")
@@ -1294,6 +1303,10 @@ def create_app() -> Flask:
                     jobs[job_id]["status"] = JobStatus.FAILED
                     jobs[job_id]["error"] = str(e)
                     jobs[job_id]["updated_at"] = _utc_now().isoformat()
+                
+                # Clean up on error too
+                import gc
+                gc.collect()
 
         thread = threading.Thread(target=run_job, daemon=True)
         thread.start()
@@ -1331,10 +1344,17 @@ def create_app() -> Flask:
             if job["status"] == JobStatus.FAILED:
                 return jsonify({"error": job["error"], "status": job["status"]}), 500
             
-            return jsonify({
+            result = {
                 "jobId": job["id"],
                 "status": job["status"],
                 "result": job["result"],
+            }
+            
+            # Clean up job from memory after result is retrieved
+            print(f"[JOB {job_id}] Removing completed job from memory")
+            del jobs[job_id]
+            
+            return jsonify(result)
                 "traces": job["traces"],
             })
 

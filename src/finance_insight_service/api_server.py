@@ -47,10 +47,48 @@ class JobStatus(str, Enum):
 # In-memory job storage (for production, use Redis or database)
 jobs = {}
 jobs_lock = threading.Lock()
+JOB_EXPIRATION_SECONDS = 600  # Jobs expire after 10 minutes (reduced to free memory faster)
 
 
 def _utc_now() -> datetime:
     return datetime.utcnow()
+
+
+def _cleanup_expired_jobs():
+    """Background thread to periodically clean up expired jobs."""
+    import time
+    
+    while True:
+        time.sleep(300)  # Check every 5 minutes
+        try:
+            now = _utc_now()
+            expired_jobs = []
+            
+            with jobs_lock:
+                for job_id, job in list(jobs.items()):
+                    # Parse completion time
+                    updated_str = job.get("updated_at", "")
+                    if updated_str:
+                        try:
+                            updated_time = datetime.fromisoformat(updated_str.replace('Z', '+00:00'))
+                        except:
+                            continue
+                        
+                        age_seconds = (now - updated_time).total_seconds()
+                        
+                        # Remove completed/failed jobs older than expiration time
+                        if job["status"] in [JobStatus.COMPLETED, JobStatus.FAILED] and age_seconds > JOB_EXPIRATION_SECONDS:
+                            expired_jobs.append(job_id)
+                            del jobs[job_id]
+                            print(f"[CLEANUP] Removed expired job {job_id} (age: {age_seconds:.0f}s)")
+            
+            if expired_jobs:
+                import gc
+                gc.collect()
+                print(f"[CLEANUP] Cleaned up {len(expired_jobs)} expired jobs, freed memory")
+        
+        except Exception as e:
+            print(f"[CLEANUP] Error in cleanup thread: {e}")
 
 
 def _trim_text(value: str, limit: int = 400) -> str:
@@ -776,6 +814,13 @@ def create_app() -> Flask:
         }
     })
 
+    # Start cleanup thread (only once per app instance)
+    if not hasattr(create_app, '_cleanup_started'):
+        cleanup_thread = threading.Thread(target=_cleanup_expired_jobs, daemon=True)
+        cleanup_thread.start()
+        create_app._cleanup_started = True
+        print("[INIT] Started job cleanup thread")
+
     mongo_uri = os.getenv("MONGO_URI", "mongodb://localhost:27017")
     mongo_db = os.getenv("MONGO_DB", "finance_insight")
     api_key = os.getenv("API_KEY", "")
@@ -802,10 +847,38 @@ def create_app() -> Flask:
 
     @app.get("/health")
     def health():
+        import sys
+        job_count = 0
+        pending = 0
+        running = 0
+        completed = 0
+        failed = 0
+        
+        with jobs_lock:
+            job_count = len(jobs)
+            for job in jobs.values():
+                status = job.get("status")
+                if status == JobStatus.PENDING:
+                    pending += 1
+                elif status == JobStatus.RUNNING:
+                    running += 1
+                elif status == JobStatus.COMPLETED:
+                    completed += 1
+                elif status == JobStatus.FAILED:
+                    failed += 1
+        
         return jsonify(
             {
                 "status": "ok",
                 "mongo": "ok" if store.ping() else "error",
+                "jobs": {
+                    "total": job_count,
+                    "pending": pending,
+                    "running": running,
+                    "completed": completed,
+                    "failed": failed,
+                },
+                "memory_mb": sys.getsizeof(jobs) / (1024 * 1024),
             }
         )
 
@@ -1285,15 +1358,25 @@ def create_app() -> Flask:
                         "threadId": thread_id,
                     }
                     jobs[job_id]["updated_at"] = _utc_now().isoformat()
+                    # Keep only essential data, remove traces to save memory
+                    jobs[job_id]["traces"] = jobs[job_id]["traces"][-5:]  # Keep only last 5 traces
                 
-                # Clean up large objects to free memory
+                # Clean up large objects to free memory IMMEDIATELY
                 print(f"[JOB {job_id}] Cleaning up memory")
-                del crew
-                del result
-                del traces
-                del conversation_summary
+                # Delete local variables if they exist
+                if 'crew' in locals():
+                    del crew
+                if 'result' in locals():
+                    del result
+                if 'traces' in locals():
+                    del traces
+                if 'conversation_summary' in locals():
+                    del conversation_summary
+                if 'inputs' in locals():
+                    del inputs
                 import gc
                 gc.collect()
+                print(f"[JOB {job_id}] Memory cleanup complete, job will auto-expire in {JOB_EXPIRATION_SECONDS}s")
 
             except Exception as e:
                 print(f"[JOB {job_id}] Error: {e}")
@@ -1350,11 +1433,33 @@ def create_app() -> Flask:
                 "result": job["result"],
             }
             
-            # Clean up job from memory after result is retrieved
-            print(f"[JOB {job_id}] Removing completed job from memory")
-            del jobs[job_id]
+            # Don't delete job immediately - let cleanup thread handle expiration
+            # This allows retrying result fetch if needed and prevents memory pressure
+            # Jobs will be auto-cleaned after JOB_EXPIRATION_SECONDS
             
             return jsonify(result)
+
+    @app.post("/jobs/cleanup")
+    def cleanup_jobs():
+        """Manually trigger job cleanup (admin endpoint)."""
+        import gc
+        now = _utc_now()
+        removed = []
+        
+        with jobs_lock:
+            for job_id, job in list(jobs.items()):
+                # Remove all completed/failed jobs
+                if job["status"] in [JobStatus.COMPLETED, JobStatus.FAILED]:
+                    removed.append(job_id)
+                    del jobs[job_id]
+        
+        gc.collect()
+        
+        return jsonify({
+            "status": "ok",
+            "removed": len(removed),
+            "remaining": len(jobs),
+        })
 
     return app
 

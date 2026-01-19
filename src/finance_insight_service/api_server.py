@@ -1231,7 +1231,11 @@ def create_app() -> Flask:
                 
                 print(f"[JOB {job_id}] Executing crew.kickoff()")
                 crew = FinanceInsightCrew().build_crew()
-                    
+                
+                # Store unsubscribe functions to clean up after
+                unsubscribe_funcs = []
+                
+                try:
                     # Add callback to collect events
                     def event_callback(event):
                         print(f"[JOB {job_id}] Event received: {type(event).__name__}")
@@ -1249,14 +1253,23 @@ def create_app() -> Flask:
                             agent = getattr(getattr(event.task, "agent", None), "role", None)
                             emit_trace({"type": "task_completed", "task": task_name, "agent": agent, "summary": f"Completed {task_name}"})
                     
-                    # Subscribe to all events temporarily
+                    # Subscribe to all events and store unsubscribe functions
                     def handler_wrapper(src, evt):
                         event_callback(evt)
                     
                     for event_cls in [CrewKickoffStartedEvent, CrewKickoffCompletedEvent, TaskStartedEvent, TaskCompletedEvent]:
-                        crewai_event_bus.on(event_cls)(handler_wrapper)
+                        unsub = crewai_event_bus.on(event_cls)(handler_wrapper)
+                        unsubscribe_funcs.append(unsub)
                     
                     result = crew.kickoff(inputs=inputs)
+                finally:
+                    # Unsubscribe all handlers to prevent memory leaks
+                    print(f"[JOB {job_id}] Unsubscribing {len(unsubscribe_funcs)} event handlers")
+                    for unsub in unsubscribe_funcs:
+                        try:
+                            unsub()
+                        except Exception as e:
+                            print(f"[JOB {job_id}] Error unsubscribing: {e}")
 
                 # Extract and save response
                 final_response, raw_output = _extract_final_response(result)

@@ -51,38 +51,145 @@ The system uses a **sequential multi-agent workflow** with quality gates at each
 
 ### Backend Components
 
+#### **Flask Backend (Python 3.12)**
+The API server is built with **Flask 3.0+** for handling asynchronous agent workflows:
+
+**Key Features**:
+- **Async Job Processing**: Non-blocking architecture allows multiple queries to run concurrently
+- **Thread-Safe Job Queue**: In-memory job dictionary with automatic cleanup (10-minute expiration)
+- **Health Monitoring**: `/health` endpoint reports system status, MongoDB connection, and job statistics
+- **Memory Management**: Background cleanup thread runs every 5 minutes to prevent memory leaks
+- **RESTful API Endpoints**:
+  - `POST /research` - Submit new financial analysis query
+  - `GET /result/<job_id>` - Poll for job completion and retrieve results
+  - `GET /health` - System health and resource usage
+  - `POST /workflow` - Run specific workflow modules (research/quant/audit)
+
+**Why Flask?**
+- **Lightweight & Flexible**: Minimal overhead, easy integration with CrewAI agents
+- **Python Ecosystem**: Native compatibility with yfinance, pandas, FAISS, and ML libraries
+- **Production-Ready**: Runs under Gunicorn with multiple workers for horizontal scaling
+- **OpenTelemetry Support**: Seamless instrumentation via AMP's auto-injection
+- **Async Threading**: Handles long-running agent workflows without blocking requests
+
+**Architecture**:
+```python
+Flask App
+├─ Job Submission → Create job_id → Start agent thread → Return job_id
+├─ Background Thread → Execute CrewAI workflow → Store result in MongoDB
+├─ Cleanup Thread → Remove expired jobs every 5 minutes → gc.collect()
+└─ Result Polling → Fetch from MongoDB → Return to client
+```
+
 #### **FAISS Vector Database**
 The system uses **FAISS (Facebook AI Similarity Search)** for efficient semantic search and document retrieval:
 
-- **Purpose**: Store and retrieve financial document embeddings for context-aware research
-- **Use Case**: When analyzing companies, FAISS enables quick retrieval of relevant historical research, news articles, and financial reports
-- **Implementation**: Documents are embedded using OpenAI's embedding models and indexed in FAISS for sub-millisecond similarity search
-- **Location**: `data/faiss.index` - Pre-built index with financial domain knowledge
-- **Benefits**:
+**Full Form**: **F**acebook **A**I **S**imilarity **S**earch
+
+**Why FAISS?**
+- **Speed**: Sub-millisecond search over millions of documents using approximate nearest neighbors (ANN)
+- **Memory Efficiency**: Compressed vector representations reduce RAM usage by 4-8x compared to raw embeddings
+- **No Network Latency**: Runs in-memory within the application (no external database calls)
+- **Scalability**: Production-proven at Meta/Facebook for billion-scale vector search
+- **Open Source**: No licensing costs, active community, CPU/GPU support
+
+**Use Case in Finance Insight Service**:
+When analyzing "NVIDIA's AI chip dominance", FAISS retrieves:
+- Historical research reports mentioning "GPU market share"
+- News articles about "data center AI accelerators"
+- Earnings call transcripts discussing "AI revenue growth"
+
+This provides agents with **domain-specific context** beyond their training data, reducing hallucinations and improving accuracy.
+
+**Implementation Details**:
+- **Embedding Model**: OpenAI `text-embedding-3-small` (1536 dimensions)
+- **Index Type**: HNSW (Hierarchical Navigable Small World) for fast approximate search
+- **Location**: `data/faiss.index` - Pre-built index with 10,000+ financial documents
+- **Query Flow**: User query → Embed → FAISS search → Top-K documents → Pass to Researcher agent
+
+**Benefits**:
   - Fast semantic search over large document collections
   - Memory-efficient approximate nearest neighbor search
   - No external database dependency (runs in-memory)
   - Enables RAG (Retrieval-Augmented Generation) for more accurate agent responses
+  - Offline operation - no API calls required for document retrieval
 
-#### **MongoDB (Job Queue & Persistent Storage)**
+#### **MongoDB Atlas (Job Queue & Persistent Storage)**
 **MongoDB Atlas** serves as the primary database for asynchronous job management:
 
-- **Purpose**: Persistent storage for long-running research jobs, user queries, and results
-- **Job Queue Architecture**:
+**Why MongoDB?**
+- **Schema Flexibility**: Store varied agent outputs (JSON, traces, errors) without rigid schemas
+- **Document Model**: Natural fit for job documents with nested traces and metadata
+- **Automatic Expiration**: TTL indexes clean up old jobs without manual intervention
+- **High Availability**: Atlas provides multi-region replication and automatic failover
+- **Serverless Scaling**: Auto-scales based on workload (no capacity planning)
+- **Geographic Distribution**: Mumbai region deployment reduces latency for Indian users
+
+**Job Queue Architecture**:
   - Each query creates a job with unique `job_id`
   - Jobs track status: `pending` → `running` → `completed` / `failed`
   - Results stored with timestamps, execution traces, and metadata
-- **Collections**:
-  - `jobs` - Active and historical research requests
-  - `results` - Agent outputs, traces, and validation outcomes
-  - `users` (if authentication enabled) - User sessions and preferences
-- **Benefits**:
+  
+**Collections**:
+  - `jobs` - Active and historical research requests with status tracking
+  - `results` - Agent outputs, CrewAI traces, and validation outcomes
+  - `traces` (optional) - Detailed OpenTelemetry spans for debugging
+  - `users` (if authentication enabled) - User sessions and query history
+  
+**Why Not Just In-Memory?**
+- **Persistence**: Results survive pod restarts and crashes
+- **Async Processing**: Users can close browser and check results later
+- **Scalability**: Multiple backend pods can share the same job queue
+- **Audit Trail**: Compliance teams can review all agent decisions and data sources
+- **Cost Attribution**: Track token usage and costs per user/query
+
+**Benefits**:
   - Asynchronous processing - Users don't wait for 5-10 minute analyses
   - Job persistence - Results survive pod restarts
   - Automatic cleanup - Jobs expire after 10 minutes to prevent memory bloat
   - Audit trail - Full history of queries and agent decisions
+  - Multi-pod support - Horizontal scaling with shared state
 
-**Connection**: MongoDB Atlas (Mumbai region) for low-latency access from Indian deployments
+**Connection**: MongoDB Atlas (Mumbai region, AWS M10 cluster) for low-latency access from Indian deployments
+
+#### **uv (Ultra-fast Python Package Manager)**
+This project uses **uv** for dependency management instead of traditional `pip` or `poetry`:
+
+**What is uv?**
+**uv** is a Rust-based Python package installer and resolver developed by Astral (creators of Ruff). It's a drop-in replacement for `pip`, `pip-tools`, and `virtualenv` but **10-100x faster**.
+
+**Why uv?**
+- **Speed**: Installs packages 10-100x faster than pip (Rust-powered parallel downloads)
+- **Deterministic Builds**: Lock file ensures identical dependencies across dev/staging/prod
+- **Better Resolution**: Solves complex dependency conflicts that break pip
+- **Disk Efficiency**: Global cache prevents duplicate downloads across projects
+- **Compatible**: Works with PyPI, private registries, and GitHub repos
+- **Modern Tooling**: Single binary, no bootstrapping issues
+
+**Usage in This Project**:
+```bash
+# Install dependencies (equivalent to pip install -r requirements.txt)
+uv pip install -r requirements.txt
+
+# Add new package (equivalent to pip install + requirements.txt update)
+uv pip install crewai
+
+# Create virtual environment (equivalent to python -m venv)
+uv venv
+```
+
+**Impact on Deployment**:
+- **Docker Build Speed**: `uv pip install` in Dockerfile reduces image build time from 5 minutes → 30 seconds
+- **CI/CD Pipelines**: Faster dependency installation speeds up automated testing
+- **Kubernetes Startup**: Pods start faster with pre-cached dependencies
+- **Development**: Developers iterate faster with instant package installs
+
+**Comparison**:
+| Tool | Install Time | Lock File | Dependency Resolution | Written In |
+|------|--------------|-----------|----------------------|------------|
+| pip | ~2-3 min | ❌ | Basic (can break) | Python |
+| poetry | ~1-2 min | ✅ | Good | Python |
+| **uv** | **~10-20 sec** | ✅ | Excellent | **Rust** |
 
 ### Frontend
 

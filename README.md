@@ -28,6 +28,8 @@ Instead of spending 2-3 hours researching a stock, users get a comprehensive ana
 
 ## Architecture Overview
 
+![Architecture Diagram](https://github.com/sahas-eashan/Finance-Insight-Service-CrewAI-/blob/app/image.png)
+
 The system uses a **sequential multi-agent workflow** with quality gates at each step:
 
 ### **Agents:**

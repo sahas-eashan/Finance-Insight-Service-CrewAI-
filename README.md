@@ -47,6 +47,73 @@ The system uses a **sequential multi-agent workflow** with quality gates at each
 
 ---
 
+## Technology Stack
+
+### Backend Components
+
+#### **FAISS Vector Database**
+The system uses **FAISS (Facebook AI Similarity Search)** for efficient semantic search and document retrieval:
+
+- **Purpose**: Store and retrieve financial document embeddings for context-aware research
+- **Use Case**: When analyzing companies, FAISS enables quick retrieval of relevant historical research, news articles, and financial reports
+- **Implementation**: Documents are embedded using OpenAI's embedding models and indexed in FAISS for sub-millisecond similarity search
+- **Location**: `data/faiss.index` - Pre-built index with financial domain knowledge
+- **Benefits**:
+  - Fast semantic search over large document collections
+  - Memory-efficient approximate nearest neighbor search
+  - No external database dependency (runs in-memory)
+  - Enables RAG (Retrieval-Augmented Generation) for more accurate agent responses
+
+#### **MongoDB (Job Queue & Persistent Storage)**
+**MongoDB Atlas** serves as the primary database for asynchronous job management:
+
+- **Purpose**: Persistent storage for long-running research jobs, user queries, and results
+- **Job Queue Architecture**:
+  - Each query creates a job with unique `job_id`
+  - Jobs track status: `pending` → `running` → `completed` / `failed`
+  - Results stored with timestamps, execution traces, and metadata
+- **Collections**:
+  - `jobs` - Active and historical research requests
+  - `results` - Agent outputs, traces, and validation outcomes
+  - `users` (if authentication enabled) - User sessions and preferences
+- **Benefits**:
+  - Asynchronous processing - Users don't wait for 5-10 minute analyses
+  - Job persistence - Results survive pod restarts
+  - Automatic cleanup - Jobs expire after 10 minutes to prevent memory bloat
+  - Audit trail - Full history of queries and agent decisions
+
+**Connection**: MongoDB Atlas (Mumbai region) for low-latency access from Indian deployments
+
+### Frontend
+
+#### **Agent Chat UI**
+The web interface is a forked and customized version of an open-source agent chat platform:
+
+**Repository**: [sahas-eashan/Agent-chat](https://github.com/sahas-eashan/Agent-chat)
+
+**Key Features**:
+- **Real-time chat interface** - Submit queries and see agent progress live
+- **Job status polling** - Shows pending/running/completed states
+- **Trace visualization** - View agent execution steps and validation checkpoints
+- **History management** - Browse past queries and results
+- **Settings configuration** - Manage API keys, model selection, and preferences
+
+**Technology Stack**:
+- **Framework**: Next.js 14 with TypeScript
+- **Styling**: Tailwind CSS for responsive design
+- **Components**: Custom React components for chat, history, and settings
+- **API Integration**: REST client communicating with Flask backend at `/finance-insight` endpoint
+
+**Deployment**: Runs separately from backend, typically on `http://localhost:3000` during development or deployed to Vercel/Netlify for production
+
+**Customizations**:
+- Integration with Finance Insight Service backend
+- Custom UI for displaying financial analysis results
+- Trace viewer for CrewAI agent workflows
+- Job queue status indicators
+
+---
+
 ## Framework: CrewAI
 
 ### Why CrewAI?

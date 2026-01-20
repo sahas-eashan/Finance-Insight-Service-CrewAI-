@@ -12,7 +12,10 @@ RUN apt-get update \
 COPY . .
 
 RUN pip install --no-cache-dir uv \
-    && uv sync --system --frozen
+    && uv sync --frozen
+
+ENV VIRTUAL_ENV=/app/.venv
+ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 
 EXPOSE 8000
 

@@ -629,6 +629,7 @@ AMP is built on **OpenChoreo** for internal agent deployments and leverages **Op
 2. **AMP Platform Installed** - Follow the [AMP Quick Start Guide](https://github.com/wso2/ai-agent-management-platform)
 3. **Docker Registry** - Local or remote registry accessible to your cluster
 4. **MongoDB Atlas** - Database connection string (or local MongoDB)
+5. **API Keys** - OpenAI, Serper, and other service keys ([Setup Guide](API_KEYS.md))
 
 #### Deployment Steps
 

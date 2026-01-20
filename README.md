@@ -426,6 +426,308 @@ This enables rich validation and ensures nothing is lost or invented.
 4. **Planner** synthesizes final output (has full context)
 
 This ensures **transparency** (failures documented), **quality** (multiple checkpoints), and **robustness** (partial data doesn't crash the system).
-- numeric_sanity_check (custom): range checks + missing-field checks.
-- cross_source_check: compare two data sources when available.
+
+---
+
+## Deployment
+
+### What is WSO2 AI Agent Management Platform (AMP)?
+
+**WSO2 AI Agent Management Platform** is an open-source control plane designed for enterprises to deploy, manage, and govern AI agents at scale. It provides:
+
+- **Deploy at Scale** - Run AI agents on Kubernetes with production-ready configurations
+- **Lifecycle Management** - Manage agent versions, configurations, and deployments from a unified control plane
+- **Full Observability** - Capture traces, metrics, and logs using OpenTelemetry for complete visibility into agent behavior
+- **Governance** - Enforce policies, manage access controls, and ensure compliance across all agents
+- **Auto-Instrumentation** - Zero-code instrumentation for AI frameworks (CrewAI, LangChain, LlamaIndex)
+
+AMP is built on **OpenChoreo** for internal agent deployments and leverages **OpenTelemetry** for extensible instrumentation. It allows you to monitor not just your infrastructure, but the actual behavior of AI agents—including LLM calls, tool usage, task execution, and validation checkpoints.
+
+**GitHub Repository:** [WSO2 AI Agent Management Platform](https://github.com/wso2/ai-agent-management-platform)
+
+---
+
+### Deploying Finance Insight Service on AMP
+
+#### Prerequisites
+
+1. **Kubernetes Cluster** - k3d or any Kubernetes cluster (tested on k3d)
+2. **AMP Platform Installed** - Follow the [AMP Quick Start Guide](https://github.com/wso2/ai-agent-management-platform)
+3. **Docker Registry** - Local or remote registry accessible to your cluster
+4. **MongoDB Atlas** - Database connection string (or local MongoDB)
+
+#### Deployment Steps
+
+##### 1. Install AMP Platform
+
+```bash
+# Clone AMP repository
+git clone https://github.com/wso2/ai-agent-management-platform.git
+cd ai-agent-management-platform
+
+# Create k3d cluster with registry
+k3d cluster create amp-local \
+  --registry-create amp-registry:0.0.0.0:10082 \
+  --servers 1
+
+# Install AMP using Helm
+helm install wso2-amp deployments/helm-charts/wso2-ai-agent-management-platform \
+  --namespace amp-system \
+  --create-namespace
+```
+
+##### 2. Prepare Your Agent
+
+Create `.choreo/component.yaml` in your project root:
+
+```yaml
+schemaVersion: "1.0"
+id: finance-insight
+name: Finance Insight Service
+type: service
+description: AI-powered financial research assistant
+runtime: python
+buildType: dockerfile
+image: Dockerfile
+ports:
+  - port: 8000
+    type: http
+env:
+  - name: OPENAI_API_KEY
+    valueFrom: SECRET
+  - name: SERPER_API_KEY
+    valueFrom: SECRET
+  - name: MONGO_URI
+    valueFrom: SECRET
+```
+
+##### 3. Build and Push Image
+
+```bash
+# Build Docker image
+docker build -t finance-insight-service:latest .
+
+# Tag for AMP registry
+docker tag finance-insight-service:latest \
+  localhost:10082/default-finance-insight-image:v1
+
+# Push to registry
+docker push localhost:10082/default-finance-insight-image:v1
+```
+
+##### 4. Deploy via AMP Console
+
+1. Open AMP Console at `http://default.localhost:9080`
+2. Navigate to **Create Agent**
+3. Configure agent:
+   - **Name:** Finance Insight Service
+   - **Description:** AI-powered financial research assistant
+   - **Type:** Service
+   - **Runtime:** Python
+   - **Port:** 8000
+4. Add environment variables:
+   - `OPENAI_API_KEY` → Your OpenAI API key
+   - `SERPER_API_KEY` → Your Serper API key
+   - `MONGO_URI` → Your MongoDB connection string
+5. Click **Deploy**
+
+##### 5. Verify Deployment
+
+```bash
+# Check pod status
+kubectl get pods -n dp-default-default-default-<namespace-id>
+
+# Check service endpoint
+curl http://default.localhost:9080/finance-insight/health
+```
+
+Expected response:
+```json
+{
+  "status": "ok",
+  "mongo": "ok",
+  "jobs": {"total": 0, "pending": 0, "running": 0, "completed": 0}
+}
+```
+
+##### 6. Test with a Query
+
+```bash
+curl -X POST http://default.localhost:9080/finance-insight/research \
+  -H "Content-Type: application/json" \
+  -d '{
+    "user_request": "Analyze NVIDIA stock performance and AI chip market trends"
+  }'
+```
+
+Response includes `job_id`. Poll for results:
+
+```bash
+curl http://default.localhost:9080/finance-insight/result/<job_id>
+```
+
+---
+
+### Observability in AMP - Viewing Traces
+
+The most powerful feature of AMP is **full-stack observability** with OpenTelemetry traces. This allows you to see:
+
+- **Agent-level traces** - Which agents were invoked, in what order
+- **Task execution** - How long each task took, what inputs/outputs it had
+- **LLM calls** - Which models were called, prompts, responses, token counts
+- **Tool usage** - Which tools were executed, parameters, results
+- **Validation checkpoints** - Audit outcomes (APPROVED, PARTIAL, REJECTED)
+
+#### Accessing Traces in AMP Console
+
+1. **Navigate to Observability**
+   - Open AMP Console at `http://default.localhost:9080`
+   - Go to **Observability → Traces**
+
+2. **View Agent Execution**
+   - Each query creates a **root span** representing the entire workflow
+   - Child spans show individual tasks: Planner → Researcher → Auditor → Quant → Final Report
+
+3. **Inspect Task Details**
+   - Click on any span to see:
+     - **Duration** - How long the task took
+     - **Attributes** - Agent role, task description, expected output
+     - **Events** - Tool calls, LLM interactions, validation results
+
+4. **Trace LLM Calls**
+   - LLM spans show:
+     - **Model** - `gpt-4o`, `gpt-4o-mini`, etc.
+     - **Prompt** - Full input to the model
+     - **Response** - Generated output
+     - **Token Count** - Input tokens, output tokens, total cost
+
+5. **Debug Failures**
+   - Failed spans are highlighted in red
+   - Error messages show exact failure reason
+   - Stack traces available for Python exceptions
+
+#### Example: Tracing a Finance Query
+
+**Query:** "Analyze NVIDIA's AI chip dominance and competition from AMD"
+
+**Trace Structure:**
+```
+CrewAI Workflow (15.2s)
+├─ Planner Task (2.1s)
+│  └─ LLM Call: gpt-4o (1.8s) - Decide modules to run
+├─ Research Task (4.5s)
+│  ├─ Tool: serper_search (1.2s) - "NVIDIA AI chip market share"
+│  ├─ Tool: scrape_website (2.1s) - news.nvidia.com article
+│  └─ LLM Call: gpt-4o (0.8s) - Extract drivers
+├─ Audit Research (1.3s)
+│  └─ LLM Call: gpt-4o-mini (1.1s) - Validate citations
+├─ Quant Task (5.8s)
+│  ├─ Tool: fetch_market_data (2.3s) - NVDA historical prices
+│  ├─ Tool: safe_python_exec (2.9s) - Calculate metrics
+│  └─ LLM Call: gpt-4o (0.4s) - Format results
+├─ Audit Quant (0.9s)
+│  └─ LLM Call: gpt-4o-mini (0.7s) - Validate calculations
+└─ Final Report (0.6s)
+   └─ LLM Call: gpt-4o (0.5s) - Synthesize output
+```
+
+**Key Insights from Traces:**
+- Research found 3 sources, 2 successfully scraped
+- Quant calculated volatility (32% annualized) using safe Python execution
+- Both audits passed (APPROVED status)
+- Total LLM cost: ~$0.15 (tracked via token counts)
+- Bottleneck: Web scraping (2.1s) - could be optimized with parallel fetching
+
+---
+
+### AMP Deployment Architecture
+
+**High-Level Overview:**
+
+```
+┌─────────────────────────────────────────────────────┐
+│            WSO2 AMP Console (Web UI)                 │
+│    - Deploy agents  - View traces  - Manage policies │
+└────────────────────┬────────────────────────────────┘
+                     │
+┌────────────────────▼────────────────────────────────┐
+│              AMP Control Plane                       │
+│  ┌─────────────┐  ┌──────────────┐  ┌────────────┐ │
+│  │  AMP API    │  │ Trace        │  │ OpenChoreo │ │
+│  │  (Backend)  │  │ Observer API │  │ (Builder)  │ │
+│  └─────────────┘  └──────────────┘  └────────────┘ │
+└────────────────────┬────────────────────────────────┘
+                     │
+┌────────────────────▼────────────────────────────────┐
+│         Kubernetes Cluster (k3d / GKE / EKS)         │
+│  ┌─────────────────────────────────────────────┐   │
+│  │  Finance Insight Service Pod                 │   │
+│  │  ┌───────────────────────────────────────┐  │   │
+│  │  │ Init Container: amp-python-instrumentation│ │
+│  │  │ (Auto-injects OpenTelemetry)            │  │   │
+│  │  └───────────────────────────────────────┘  │   │
+│  │  ┌───────────────────────────────────────┐  │   │
+│  │  │  Flask API Server                      │  │   │
+│  │  │  - /research  - /result  - /health     │  │   │
+│  │  └───────────────────────────────────────┘  │   │
+│  │  ┌───────────────────────────────────────┐  │   │
+│  │  │  CrewAI Agents (Instrumented)         │  │   │
+│  │  │  - Planner  - Researcher  - Quant      │  │   │
+│  │  │  - Auditor (validates each step)       │  │   │
+│  │  └───────────────────────────────────────┘  │   │
+│  │                     │                        │   │
+│  │         Emits OpenTelemetry Traces          │   │
+│  │                     ▼                        │   │
+│  │  ┌───────────────────────────────────────┐  │   │
+│  │  │  OTLP Exporter → AMP Trace Backend    │  │   │
+│  │  └───────────────────────────────────────┘  │   │
+│  └─────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────┘
+          │                            │
+          ▼                            ▼
+  ┌───────────────┐          ┌──────────────────┐
+  │ MongoDB Atlas │          │  External APIs   │
+  │ (Job Storage) │          │ - OpenAI         │
+  └───────────────┘          │ - Serper Search  │
+                             │ - yfinance       │
+                             └──────────────────┘
+```
+
+**Key Components:**
+
+1. **AMP Console** - Web UI for managing agent deployments
+2. **AMP API** - REST API powering the control plane
+3. **Trace Observer** - Stores and queries OpenTelemetry traces
+4. **OpenChoreo** - Builds container images from source code
+5. **Auto-Instrumentation Init Container** - Injects OpenTelemetry without code changes
+6. **Finance Insight Service Pod** - Your CrewAI agent running in Kubernetes
+7. **OTLP Exporter** - Sends traces to AMP backend
+
+**Benefits of AMP Deployment:**
+
+- ✅ **Production-Ready** - Kubernetes deployment with health checks, auto-restarts
+- ✅ **Zero-Code Instrumentation** - OpenTelemetry injected automatically via init container
+- ✅ **Full Observability** - See every LLM call, tool usage, task execution
+- ✅ **Cost Tracking** - Token counts and estimated costs for each query
+- ✅ **Debugging** - Trace failed queries to exact step where error occurred
+- ✅ **Governance** - Policy enforcement, access control, compliance tracking
+- ✅ **Scalability** - Kubernetes handles load balancing, scaling, resilience
+
+**Resource Requirements:**
+
+- **Minimum:** 4 CPU cores, 8GB RAM (for both AMP + agent)
+- **Recommended:** 8 CPU cores, 16GB RAM (for production workloads)
+- **For Finance Service:** 4 CPU cores, 8GB RAM per pod (handles complex multi-agent workflows)
+
+---
+
+### Next Steps
+
+1. **Explore Traces** - Run queries and examine the traces in AMP Console
+2. **Set Resource Limits** - Adjust CPU/memory in `.choreo/component.yaml` or AMP console
+3. **Configure Autoscaling** - Set horizontal pod autoscaling for high traffic
+4. **Add More Agents** - Deploy other AI agents to the same AMP platform
+5. **Set Governance Policies** - Define rate limits, access controls, cost budgets
+
+For detailed AMP documentation, see the [official repository](https://github.com/wso2/ai-agent-management-platform).
 - policy_lint (custom): bans "buy now", "guaranteed profit", etc., and enforces disclaimers.

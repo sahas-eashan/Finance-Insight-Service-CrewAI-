@@ -10,18 +10,18 @@ from pydantic import BaseModel, Field
 from crewai.tools import BaseTool
 
 
-class FundamentalsFetchArgs(BaseModel):
+class CompanyFundamentalsFetchArgs(BaseModel):
     symbol: str = Field(..., description="Ticker or symbol to fetch fundamentals for.")
     limit: int = Field(1, description="Number of periods to return (latest first).")
 
 
-class FundamentalsFetchTool(BaseTool):
-    name: str = "fundamentals_fetch"
+class CompanyFundamentalsFetchTool(BaseTool):
+    name: str = "company_fundamentals_fetch"
     description: str = (
         "Fetches fundamentals from Alpha Vantage (overview, income statement, "
         "balance sheet, cash flow). Requires ALPHAVANTAGE_API_KEY in the environment."
     )
-    args_schema: type[BaseModel] = FundamentalsFetchArgs
+    args_schema: type[BaseModel] = CompanyFundamentalsFetchArgs
 
     def _run(self, symbol: str, limit: int = 1) -> str:
         symbol = (symbol or "").strip().upper()

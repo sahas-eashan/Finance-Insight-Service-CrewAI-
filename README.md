@@ -33,10 +33,9 @@ Instead of spending 2-3 hours researching a stock, users get a comprehensive ana
 The system uses a **sequential multi-agent workflow** with quality gates at each step:
 
 ### **Agents:**
-1. **Planner** - Orchestrates workflow and decides which modules to run
-2. **Researcher** - Gathers news, evidence, and formulas from web sources
-3. **Quant** - Fetches market data, calculates metrics, runs scenarios
-4. **Auditor** - Validates outputs for quality, accuracy, and compliance
+1. **Research** - Gathers news, evidence, and formulas from web sources
+2. **Quant** - Fetches market data, calculates metrics, runs scenarios
+3. **Audit** - Validates outputs and produces the final response
 
 ### **Key Design Principles:**
 - **Accuracy over speed** - Multiple validation checkpoints ensure quality
@@ -57,7 +56,7 @@ The API server is built with **Flask 3.0+** for handling asynchronous agent work
 **Key Features**:
 - **Async Job Processing**: Non-blocking architecture allows multiple queries to run concurrently
 - **Thread-Safe Job Queue**: In-memory job dictionary with automatic cleanup (10-minute expiration)
-- **Health Monitoring**: `/health` endpoint reports system status, MongoDB connection, and job statistics
+- **Health Monitoring**: `/health` endpoint reports system status and job statistics
 - **Memory Management**: Background cleanup thread runs every 5 minutes to prevent memory leaks
 - **RESTful API Endpoints**:
   - `POST /research` - Submit new financial analysis query
@@ -76,9 +75,9 @@ The API server is built with **Flask 3.0+** for handling asynchronous agent work
 ```python
 Flask App
 ├─ Job Submission → Create job_id → Start agent thread → Return job_id
-├─ Background Thread → Execute CrewAI workflow → Store result in MongoDB
+├─ Background Thread → Execute CrewAI workflow → Store result in memory
 ├─ Cleanup Thread → Remove expired jobs every 5 minutes → gc.collect()
-└─ Result Polling → Fetch from MongoDB → Return to client
+└─ Result Polling → Fetch from memory → Return to client
 ```
 
 #### **FAISS Vector Database**
@@ -113,44 +112,6 @@ This provides agents with **domain-specific context** beyond their training data
   - No external database dependency (runs in-memory)
   - Enables RAG (Retrieval-Augmented Generation) for more accurate agent responses
   - Offline operation - no API calls required for document retrieval
-
-#### **MongoDB Atlas (Job Queue & Persistent Storage)**
-**MongoDB Atlas** serves as the primary database for asynchronous job management:
-
-**Why MongoDB?**
-- **Schema Flexibility**: Store varied agent outputs (JSON, traces, errors) without rigid schemas
-- **Document Model**: Natural fit for job documents with nested traces and metadata
-- **Automatic Expiration**: TTL indexes clean up old jobs without manual intervention
-- **High Availability**: Atlas provides multi-region replication and automatic failover
-- **Serverless Scaling**: Auto-scales based on workload (no capacity planning)
-- **Geographic Distribution**: Mumbai region deployment reduces latency for Indian users
-
-**Job Queue Architecture**:
-  - Each query creates a job with unique `job_id`
-  - Jobs track status: `pending` → `running` → `completed` / `failed`
-  - Results stored with timestamps, execution traces, and metadata
-  
-**Collections**:
-  - `jobs` - Active and historical research requests with status tracking
-  - `results` - Agent outputs, CrewAI traces, and validation outcomes
-  - `traces` (optional) - Detailed OpenTelemetry spans for debugging
-  - `users` (if authentication enabled) - User sessions and query history
-  
-**Why Not Just In-Memory?**
-- **Persistence**: Results survive pod restarts and crashes
-- **Async Processing**: Users can close browser and check results later
-- **Scalability**: Multiple backend pods can share the same job queue
-- **Audit Trail**: Compliance teams can review all agent decisions and data sources
-- **Cost Attribution**: Track token usage and costs per user/query
-
-**Benefits**:
-  - Asynchronous processing - Users don't wait for 5-10 minute analyses
-  - Job persistence - Results survive pod restarts
-  - Automatic cleanup - Jobs expire after 10 minutes to prevent memory bloat
-  - Audit trail - Full history of queries and agent decisions
-  - Multi-pod support - Horizontal scaling with shared state
-
-**Connection**: MongoDB Atlas (Mumbai region, AWS M10 cluster) for low-latency access from Indian deployments
 
 #### **uv (Ultra-fast Python Package Manager)**
 This project uses **uv** for dependency management instead of traditional `pip` or `poetry`:
@@ -199,25 +160,24 @@ The web interface is a forked and customized version of an open-source agent cha
 **Repository**: [sahas-eashan/Agent-chat](https://github.com/sahas-eashan/Agent-chat)
 
 **Key Features**:
-- **Real-time chat interface** - Submit queries and see agent progress live
+- **Scenario-based chat** - Start from curated prompts or type your own
 - **Job status polling** - Shows pending/running/completed states
-- **Trace visualization** - View agent execution steps and validation checkpoints
-- **History management** - Browse past queries and results
-- **Settings configuration** - Manage API keys, model selection, and preferences
+- **Live status cues** - See progress while the agent runs
+- **Single-session focus** - No persistent chat history
+- **Settings configuration** - Manage API base URL, API key, and service status
 
 **Technology Stack**:
 - **Framework**: Next.js 14 with TypeScript
-- **Styling**: Tailwind CSS for responsive design
-- **Components**: Custom React components for chat, history, and settings
-- **API Integration**: REST client communicating with Flask backend at `/finance-insight` endpoint
+- **Styling**: Custom CSS with CSS variables for theming
+- **Components**: Custom React components for chat and settings
+- **API Integration**: REST client communicating with Flask backend at `/chat/async`
 
 **Deployment**: Runs separately from backend, typically on `http://localhost:3000` during development or deployed to Vercel/Netlify for production
 
 **Customizations**:
-- Integration with Finance Insight Service backend
-- Custom UI for displaying financial analysis results
-- Trace viewer for CrewAI agent workflows
-- Job queue status indicators
+- Scenario cards and quick-start prompts
+- Minimal, single-chat layout with new chat action
+- Service status indicators on the settings screen
 
 ---
 
@@ -242,7 +202,7 @@ Agent(
     role="Research Agent (news + evidence)",
     goal="Discover relevant news and extract evidence-backed drivers",
     backstory="You are a meticulous researcher who only uses sources you can access...",
-    tools=[SerperDevTool(), ScrapeWebsiteTool()],
+    tools=[SerpApiNewsSearchTool(), ScrapeWebsiteTool()],
     allow_delegation=False  # No agent-to-agent delegation
 )
 ```
@@ -251,7 +211,7 @@ Agent(
 - **Goal**: What success looks like for this agent
 - **Backstory**: Detailed behavioral instructions and constraints
 - **Tools**: List of callable functions the agent can use
-- **allow_delegation**: Set to False (planner decides workflow, not agents)
+- **allow_delegation**: Set to False (agents do not delegate tasks)
 
 ### Task Definition in CrewAI
 
@@ -261,7 +221,7 @@ Task(
     description="You are given a research request: {user_request}...",
     expected_output="Return strict JSON with keys: drivers, articles, limitations",
     agent=researcher_agent,
-    context=[planner_task]  # Can access planner task output
+    context=[]  # No planner; research runs first
 )
 ```
 
@@ -275,10 +235,9 @@ Task(
 Tasks declare dependencies via `context` parameter:
 
 ```python
-research_task.context = [planner_task]
-audit_research_task.context = [planner_task, research_task]
-quant_task.context = [planner_task, research_task, audit_research_task]
-final_report_task.context = [all_7_previous_tasks]
+research_task.context = []
+quant_task.context = [research_task]
+audit_task.context = [research_task, quant_task]
 ```
 
 CrewAI automatically:
@@ -302,306 +261,15 @@ CrewAI supports multiple process types (sequential, hierarchical, consensual). W
 
 ## Complete Execution Flow
 
-### **8 Sequential Tasks:**
+### 3 Sequential Tasks
 
-#### **1. PLANNER_TASK** (Planner Agent)
-**Purpose:** Decides workflow strategy based on user request
+1. **Research Task** - gathers recent news, evidence, and formulas (with citations).
+2. **Quant Task** - fetches market data and fundamentals, computes metrics and scenarios via safe_python_exec.
+3. **Audit Task** - validates outputs and produces the final response.
 
-**Receives:**
-- User request
-- Current date/time
-- Conversation summary
-
-**Decides:**
-- Which modules to use (Research/Quant/Audit)
-- Search parameters (query, tickers, sites, days)
-- Quantitative parameters (symbol, interval, horizon)
-
-**Outputs:**
-- `plan`: Which modules to run and why
-- `research_request`: Query parameters for research
-- `quant_request`: Parameters for quantitative analysis
-- `notes`: Planning considerations
-
----
-
-#### **2. RESEARCH_NEWS_TASK** (Researcher Agent)
-**Purpose:** Gathers news articles and extracts evidence-backed insights
-
-**Tools:**
-- SerperDev/SerpApi for web search
-- ScrapeWebsiteTool for full article content
-
-**Actions:**
-- Searches web for relevant articles (max 8)
-- Scrapes full content from URLs
-- Extracts headline, timestamp, key points
-- Clusters information into 2-4 drivers (earnings, macro, regulation, product news)
-- Extracts formulas/metrics when needed
-
-**Outputs:**
-- `drivers`: Key themes with explanations and citations
-- `articles`: Full article metadata with key points
-- `metrics_formulas`: Financial formulas extracted from sources
-- `limitations`: Failed URLs, missing data, etc.
-
-**Example Output:**
-```json
-{
-  "drivers": [
-    {
-      "driver": "AI Infrastructure Growth",
-      "why_it_matters": "Data center spending increased 40% YoY driven by GPU demand",
-      "citations": [{"url": "...", "evidence": "..."}]
-    }
-  ]
-}
-```
-
----
-
-#### **3. AUDIT_RESEARCH_TASK** (Auditor Agent)
-**Purpose:** Validates research quality before proceeding
-
-**Validates:**
-- Citations present and valid
-- Timestamps not missing or fabricated
-- Relevance to user request
-- Formula extraction when needed
-
-**Returns:** APPROVED | REJECTED | PARTIAL
-
-**Example REJECTED:**
-```json
-{
-  "audit_status": "REJECTED",
-  "issues": [{
-    "category": "data_quality",
-    "problem": "Research provided no valid citations",
-    "fix_action": "Rerun research with at least 2-3 accessible sources"
-  }],
-  "required_reruns": ["research"]
-}
-```
-
-**Example PARTIAL:**
-```json
-{
-  "audit_status": "PARTIAL",
-  "issues": [{
-    "category": "incomplete_data",
-    "problem": "Only 1 source scraped, target was 3",
-    "fix_action": "Note limitation but proceed with available data"
-  }],
-  "approved_modules": ["research"],
-  "notes": ["2 URLs blocked, 1 succeeded"]
-}
-```
-
----
-
-#### **4. QUANT_SNAPSHOT_TASK** (Quant Agent)
-**Purpose:** Fetches market data and performs calculations
-
-**Tools:**
-- MarketDataFetch (Twelve Data → Stooq fallback)
-- FundamentalsFetch (Alpha Vantage)
-- SafePythonExec (sandboxed numpy/pandas)
-
-**Actions:**
-- Confirms current date via Python datetime
-- Fetches market data (price history, volume)
-- Fetches fundamentals (P/E, ROE, margins, cash flow)
-- Runs calculations using SafePythonExec
-- Computes metrics from research formulas
-- Generates scenarios (base/bull/bear) if requested
-
-**Outputs:**
-- `as_of`: Timestamp and data provider
-- `snapshot`: Current metrics and data points
-- `scenarios`: Price targets with assumptions (optional)
-- `limitations`: Missing data, API failures
-
-**Example Output:**
-```json
-{
-  "as_of": {"timestamp": "2026-01-17", "provider": "TwelveData"},
-  "snapshot": {
-    "last_close": 150.25,
-    "returns_1d": 0.023,
-    "volatility_annualized": 0.28
-  },
-  "scenarios": {
-    "base": {"price_target": 165, "assumptions": "Expected return over 30 days"},
-    "bull": {"price_target": 180, "assumptions": "+1.0 sigma move"},
-    "bear": {"price_target": 140, "assumptions": "-1.0 sigma move"}
-  }
-}
-```
-
----
-
-#### **5. AUDIT_QUANT_TASK** (Auditor Agent)
-**Purpose:** Validates quantitative analysis quality
-
-**Validates:**
-- Numeric sanity (no NaN, realistic values)
-- Required metrics computed
-- Scenario assumptions reasonable
-- RSI within 0-100, prices positive, etc.
-
-**Returns:** APPROVED | REJECTED | PARTIAL
-
----
-
-#### **6. FINAL_DRAFT_TASK** (Planner Agent)
-**Purpose:** Creates first draft of response
-
-**Rules:**
-- Use only approved outputs
-- No citations by default (unless requested)
-- Only use numbers from quant output
-- Keep concise and aligned with request
-
-**Outputs:**
-- `draft_response`: Initial answer text
-- `notes`: Drafting considerations
-
----
-
-#### **7. AUDIT_FINAL_TASK** (Auditor Agent)
-**Purpose:** Validates complete response quality
-
-**Validates:**
-- Alignment between research + quant + draft
-- Completeness for user request
-- Compliance (no personalized advice, no guaranteed returns)
-- All claims backed by data
-
-**Returns:** APPROVED | REJECTED | PARTIAL
-
----
-
-#### **8. FINAL_REPORT_TASK** (Planner Agent)
-**Purpose:** Produces final user-facing response
-
-**Receives:** ALL previous outputs including audit results
-
-**Formatting:**
-- Main answer: 2-3 paragraphs or bullet points
-- Conversational tone, direct answer
-- No section headers in main response
-- Separate sections for details:
-  - **Limitations:** Data gaps, caveats
-  - **Sources:** Citations if requested
-  - **Note/Disclaimer:** Important context
-
-**If audit REJECTED:**
-- Surfaces issues in Limitations section
-- Does not present results as approved
-- Explains what failed and why
-
-**Example Final Response (APPROVED):**
-```
-BMW sedan prices in 2026 start around $58,000 for the 530i base model, 
-with the M340i xDrive priced near $60,000. The top-tier 540i xDrive exceeds 
-$62,000. These are MSRP figures and may vary by region and dealer incentives.
-
-Limitations:
-- Prices reflect January 2026 estimates without accounting for local dealer 
-  incentives or taxes
-- Based on 2 sources; direct dealer quotes not available
-```
-
-**Example Final Response (REJECTED):**
-```
-I couldn't complete the full analysis due to data access issues.
-
-Limitations:
-- Research audit rejected: No valid citations found. Most URLs failed to load 
-  due to bot protection
-- Quant analysis skipped due to missing research data
-- Unable to provide price projections without fundamental data
-```
-
----
-
-## What Happens When Audit Fails?
-
-### **No Automatic Reruns**
-The system is sequential, not a loop. If an audit fails:
-1. Audit marks the module as REJECTED or PARTIAL
-2. Lists specific issues with fix actions
-3. Workflow continues forward (no rerun)
-4. Final report receives the failed audit status
-5. Response surfaces the issues in Limitations section
-
-### **Three Audit Outcomes:**
-
-#### **APPROVED** ✅
-- All checks passed
-- Workflow proceeds smoothly
-- Minimal limitations (only disclaimers)
-- Results presented confidently
-
-#### **PARTIAL** ⚠️
-- Some data available but incomplete
-- Issues noted but not blocking
-- Workflow continues with available data
-- Response includes caveats about data gaps
-
-**Example:**
-```
-Based on limited data, AI infrastructure spending is growing...
-
-Limitations:
-- Only 1 source successfully accessed (2 URLs blocked)
-- Analysis based on partial data - may not reflect complete picture
-```
-
-#### **REJECTED** ❌
-- Critical failures detected
-- Module outputs unusable
-- Workflow continues but marks failure
-- Final response explains what went wrong
-
-**Example:**
-```
-Analysis incomplete due to data access issues.
-
-Limitations:
-- Research failed: No citations - all sources blocked by bot protection
-- Quant skipped: Cannot analyze without research context
-- Recommendation: Try again with different sources or timeframe
-```
-
----
-
-## Context Flow (Task Dependencies)
-
-Each task receives **context** from previous tasks:
-- **Research** sees: Planner
-- **Audit_Research** sees: Planner, Research
-- **Quant** sees: Planner, Research, Audit_Research
-- **Audit_Quant** sees: Planner, Research, Audit_Research, Quant
-- **Final_Draft** sees: Planner, Research, Audit_Research, Quant, Audit_Quant
-- **Audit_Final** sees: All above + Final_Draft
-- **Final_Report** sees: **ALL 7 previous tasks**
-
-This enables rich validation and ensures nothing is lost or invented.
-
----
-
-## Separation of Concerns
-
-1. **Planner** decides strategy (what to run, what parameters)
-2. **Specialized agents** execute their domain (research OR quant, not both)
-3. **Auditor** validates quality (independent quality gate)
-4. **Planner** synthesizes final output (has full context)
-
-This ensures **transparency** (failures documented), **quality** (multiple checkpoints), and **robustness** (partial data doesn't crash the system).
-
----
+**Context Flow**:
+- Quant sees Research.
+- Audit sees Research + Quant.
 
 ## Deployment
 
@@ -628,8 +296,7 @@ AMP is built on **OpenChoreo** for internal agent deployments and leverages **Op
 1. **Kubernetes Cluster** - k3d or any Kubernetes cluster (tested on k3d)
 2. **AMP Platform Installed** - Follow the [AMP Quick Start Guide](https://github.com/wso2/ai-agent-management-platform)
 3. **Docker Registry** - Local or remote registry accessible to your cluster
-4. **MongoDB Atlas** - Database connection string (or local MongoDB)
-5. **API Keys** - OpenAI, Serper, and other service keys ([Setup Guide](API_KEYS.md))
+4. **API Keys** - OpenAI, SerpAPI, Twelve Data, Alpha Vantage ([Setup Guide](API_KEYS.md))
 
 #### Deployment Steps
 
@@ -670,9 +337,11 @@ ports:
 env:
   - name: OPENAI_API_KEY
     valueFrom: SECRET
-  - name: SERPER_API_KEY
+  - name: SERPAPI_API_KEY
     valueFrom: SECRET
-  - name: MONGO_URI
+  - name: TWELVE_DATA_API_KEY
+    valueFrom: SECRET
+  - name: ALPHAVANTAGE_API_KEY
     valueFrom: SECRET
 ```
 
@@ -702,8 +371,9 @@ docker push localhost:10082/default-finance-insight-image:v1
    - **Port:** 8000
 4. Add environment variables:
    - `OPENAI_API_KEY` → Your OpenAI API key
-   - `SERPER_API_KEY` → Your Serper API key
-   - `MONGO_URI` → Your MongoDB connection string
+   - `SERPAPI_API_KEY` → Your SerpAPI key
+   - `TWELVE_DATA_API_KEY` → Your Twelve Data API key
+   - `ALPHAVANTAGE_API_KEY` → Your Alpha Vantage API key
 5. Click **Deploy**
 
 ##### 5. Verify Deployment
@@ -720,7 +390,6 @@ Expected response:
 ```json
 {
   "status": "ok",
-  "mongo": "ok",
   "jobs": {"total": 0, "pending": 0, "running": 0, "completed": 0}
 }
 ```
@@ -728,17 +397,17 @@ Expected response:
 ##### 6. Test with a Query
 
 ```bash
-curl -X POST http://default.localhost:9080/finance-insight/research \
+curl -X POST http://default.localhost:9080/finance-insight/chat/async \
   -H "Content-Type: application/json" \
   -d '{
-    "user_request": "Analyze NVIDIA stock performance and AI chip market trends"
+    "message": "Analyze NVIDIA stock performance and AI chip market trends"
   }'
 ```
 
-Response includes `job_id`. Poll for results:
+Response includes `jobId`. Poll for results:
 
 ```bash
-curl http://default.localhost:9080/finance-insight/result/<job_id>
+curl http://default.localhost:9080/finance-insight/chat/async/<job_id>/result
 ```
 
 ---
@@ -761,7 +430,7 @@ The most powerful feature of AMP is **full-stack observability** with OpenTeleme
 
 2. **View Agent Execution**
    - Each query creates a **root span** representing the entire workflow
-   - Child spans show individual tasks: Planner → Researcher → Auditor → Quant → Final Report
+   - Child spans show individual tasks: Research → Quant → Audit
 
 3. **Inspect Task Details**
    - Click on any span to see:
@@ -787,29 +456,22 @@ The most powerful feature of AMP is **full-stack observability** with OpenTeleme
 
 **Trace Structure:**
 ```
-CrewAI Workflow (15.2s)
-├─ Planner Task (2.1s)
-│  └─ LLM Call: gpt-4o (1.8s) - Decide modules to run
-├─ Research Task (4.5s)
-│  ├─ Tool: serper_search (1.2s) - "NVIDIA AI chip market share"
-│  ├─ Tool: scrape_website (2.1s) - news.nvidia.com article
-│  └─ LLM Call: gpt-4o (0.8s) - Extract drivers
-├─ Audit Research (1.3s)
-│  └─ LLM Call: gpt-4o-mini (1.1s) - Validate citations
-├─ Quant Task (5.8s)
-│  ├─ Tool: fetch_market_data (2.3s) - NVDA historical prices
-│  ├─ Tool: safe_python_exec (2.9s) - Calculate metrics
-│  └─ LLM Call: gpt-4o (0.4s) - Format results
-├─ Audit Quant (0.9s)
-│  └─ LLM Call: gpt-4o-mini (0.7s) - Validate calculations
-└─ Final Report (0.6s)
-   └─ LLM Call: gpt-4o (0.5s) - Synthesize output
+CrewAI Workflow (12.4s)
+├─ Research Task (4.2s)
+│  ├─ Tool: serpapi_news_search (1.1s) - "NVIDIA AI chip market share"
+│  ├─ Tool: scrape_website (2.0s) - news.nvidia.com article
+│  └─ LLM Call: gpt-4o (0.7s) - Extract drivers
+├─ Quant Task (5.1s)
+│  ├─ Tool: price_history_fetch (2.0s) - NVDA historical prices
+│  ├─ Tool: safe_python_exec (2.6s) - Calculate metrics
+│  └─ LLM Call: gpt-4o (0.5s) - Format results
+└─ Audit Task (2.1s)
+   └─ LLM Call: gpt-4o-mini (1.8s) - Validate and finalize response
 ```
 
 **Key Insights from Traces:**
 - Research found 3 sources, 2 successfully scraped
-- Quant calculated volatility (32% annualized) using safe Python execution
-- Both audits passed (APPROVED status)
+- Quant calculated volatility using safe Python execution
+- Audit passed (APPROVED status)
 - Total LLM cost: ~$0.15 (tracked via token counts)
-- Bottleneck: Web scraping (2.1s) - could be optimized with parallel fetching
-
+- Bottleneck: Web scraping (2.0s) - could be optimized with parallel fetching

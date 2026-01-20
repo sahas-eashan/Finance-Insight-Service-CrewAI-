@@ -16,8 +16,6 @@ from dotenv import load_dotenv
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 from openai import OpenAI
-from pymongo import MongoClient, ReturnDocument
-from bson import ObjectId
 
 # Disable CrewAI interactive tracing prompt that causes timeout in containerized environments
 os.environ.setdefault("CREWAI_TRACING_ENABLED", "false")
@@ -42,6 +40,7 @@ class JobStatus(str, Enum):
     RUNNING = "running"
     COMPLETED = "completed"
     FAILED = "failed"
+    CANCELLED = "cancelled"
 
 
 # In-memory job storage (for production, use Redis or database)
@@ -52,6 +51,12 @@ JOB_EXPIRATION_SECONDS = 600  # Jobs expire after 10 minutes (reduced to free me
 
 def _utc_now() -> datetime:
     return datetime.utcnow()
+
+
+def _is_job_cancelled(job_id: str) -> bool:
+    with jobs_lock:
+        job = jobs.get(job_id)
+        return bool(job and job.get("status") == JobStatus.CANCELLED)
 
 
 def _cleanup_expired_jobs():
@@ -77,7 +82,7 @@ def _cleanup_expired_jobs():
                         age_seconds = (now - updated_time).total_seconds()
                         
                         # Remove completed/failed jobs older than expiration time
-                        if job["status"] in [JobStatus.COMPLETED, JobStatus.FAILED] and age_seconds > JOB_EXPIRATION_SECONDS:
+                        if job["status"] in [JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED] and age_seconds > JOB_EXPIRATION_SECONDS:
                             expired_jobs.append(job_id)
                             del jobs[job_id]
                             print(f"[CLEANUP] Removed expired job {job_id} (age: {age_seconds:.0f}s)")
@@ -194,14 +199,14 @@ def _simplify_trace(event: dict[str, Any]) -> str:
             return f"{agent_prefix}searching the web"
         
         # Fundamentals tools
-        if "fundamentals" in tool.lower():
+        if "company_fundamentals" in tool.lower():
             ticker = args.get("ticker", args.get("symbol", ""))
             if ticker:
                 return f"{agent_prefix}analyzing fundamentals for {ticker}"
             return f"{agent_prefix}fetching financial data"
-        
+
         # Market data tools
-        if "market" in tool.lower() or "price" in tool.lower():
+        if "price_history" in tool.lower():
             ticker = args.get("ticker", args.get("symbol", ""))
             if ticker:
                 return f"{agent_prefix}getting market data for {ticker}"
@@ -244,7 +249,7 @@ def _simplify_trace(event: dict[str, Any]) -> str:
             return "Web search completed"
         
         # Fundamentals completion
-        if "fundamentals" in tool.lower():
+        if "company_fundamentals" in tool.lower():
             ticker = args.get("ticker", args.get("symbol", ""))
             msg = "Retrieved financial data"
             if ticker:
@@ -268,7 +273,7 @@ def _simplify_trace(event: dict[str, Any]) -> str:
             return msg
         
         # Market data completion
-        if "market" in tool.lower() or "price" in tool.lower():
+        if "price_history" in tool.lower():
             ticker = args.get("ticker", args.get("symbol", ""))
             msg = "Retrieved market data"
             if ticker:
@@ -324,148 +329,108 @@ def _build_search_query(query: str, tickers: Any, sites: Any) -> str:
     return " ".join(parts).strip()
 
 
-class MongoStore:
-    def __init__(self, uri: str, db_name: str) -> None:
-        self.client = MongoClient(uri, serverSelectionTimeoutMS=5000)
-        self.db = self.client[db_name]
-        self.threads = self.db["threads"]
-        self.messages = self.db["messages"]
-        self.traces = self.db["traces"]
-        self.embeddings = self.db["embeddings"]
-        self.meta = self.db["meta"]
-        self._ensure_indexes()
-
-    def _ensure_indexes(self) -> None:
-        self.threads.create_index("threadId", unique=True)
-        self.threads.create_index("updatedAt")
-        self.messages.create_index("threadId")
-        self.messages.create_index("createdAt")
-        self.traces.create_index("threadId")
-        self.traces.create_index("createdAt")
-        self.embeddings.create_index("vector_id", unique=True)
-        self.embeddings.create_index("threadId")
+class InMemoryStore:
+    def __init__(self) -> None:
+        self.threads: dict[str, dict[str, Any]] = {}
+        self.messages: dict[str, dict[str, Any]] = {}
+        self.messages_by_thread: dict[str, list[str]] = {}
+        self.embeddings: dict[int, dict[str, Any]] = {}
+        self.vector_seq = 0
+        self.lock = threading.Lock()
 
     def ping(self) -> bool:
-        try:
-            self.client.admin.command("ping")
-            return True
-        except Exception:
-            return False
+        return True
 
     def create_thread(self, title: str) -> str:
         now = _utc_now()
-        thread_oid = ObjectId()
-        thread_id = str(thread_oid)
-        self.threads.insert_one(
-            {
-                "_id": thread_oid,
+        thread_id = str(uuid.uuid4())
+        with self.lock:
+            self.threads[thread_id] = {
                 "threadId": thread_id,
                 "title": title,
                 "createdAt": now,
                 "updatedAt": now,
                 "summary": "",
             }
-        )
+            self.messages_by_thread[thread_id] = []
         return thread_id
 
     def get_thread(self, thread_id: str) -> dict[str, Any] | None:
-        return self.threads.find_one({"threadId": thread_id})
+        with self.lock:
+            return self.threads.get(thread_id)
 
     def update_thread_summary(self, thread_id: str, summary: str) -> None:
-        self.threads.update_one(
-            {"threadId": thread_id},
-            {"$set": {"summary": summary, "updatedAt": _utc_now()}},
-        )
+        with self.lock:
+            thread = self.threads.get(thread_id)
+            if not thread:
+                return
+            thread["summary"] = summary
+            thread["updatedAt"] = _utc_now()
 
     def touch_thread(self, thread_id: str) -> None:
-        self.threads.update_one(
-            {"threadId": thread_id},
-            {"$set": {"updatedAt": _utc_now()}},
-        )
+        with self.lock:
+            thread = self.threads.get(thread_id)
+            if not thread:
+                return
+            thread["updatedAt"] = _utc_now()
 
     def add_message(
         self, thread_id: str, role: str, content: str, metadata: dict[str, Any] | None
     ) -> str:
         now = _utc_now()
-        result = self.messages.insert_one(
-            {
+        message_id = str(uuid.uuid4())
+        with self.lock:
+            self.messages[message_id] = {
+                "_id": message_id,
                 "threadId": thread_id,
                 "role": role,
                 "content": content,
                 "createdAt": now,
                 "metadata": metadata or {},
             }
-        )
-        self.touch_thread(thread_id)
-        return str(result.inserted_id)
+            self.messages_by_thread.setdefault(thread_id, []).append(message_id)
+            thread = self.threads.get(thread_id)
+            if thread:
+                thread["updatedAt"] = now
+        return message_id
 
     def list_messages(
         self, thread_id: str, limit: int = 30, newest_first: bool = False
     ) -> list[dict[str, Any]]:
-        sort_order = -1 if newest_first else 1
-        cursor = (
-            self.messages.find({"threadId": thread_id})
-            .sort("createdAt", sort_order)
-            .limit(limit)
-        )
-        return list(cursor)
-
-    def latest_thread(self) -> dict[str, Any] | None:
-        return self.threads.find_one(sort=[("updatedAt", -1)])
-
-    def list_recent_messages(self, limit: int = 30) -> list[dict[str, Any]]:
-        cursor = self.messages.find().sort("createdAt", -1).limit(limit)
-        messages = list(cursor)
-        return list(reversed(messages))
-
-    def add_trace(self, thread_id: str, event: dict[str, Any]) -> None:
-        payload = dict(event)
-        payload["threadId"] = thread_id
-        payload["createdAt"] = _utc_now()
-        self.traces.insert_one(payload)
-
-    def list_traces(self, thread_id: str, limit: int = 300) -> list[dict[str, Any]]:
-        cursor = (
-            self.traces.find({"threadId": thread_id})
-            .sort("createdAt", 1)
-            .limit(limit)
-        )
-        return list(cursor)
+        with self.lock:
+            message_ids = list(self.messages_by_thread.get(thread_id, []))
+            messages = [self.messages[mid] for mid in message_ids if mid in self.messages]
+        messages.sort(key=lambda m: m.get("createdAt") or _utc_now(), reverse=newest_first)
+        return messages[:limit]
 
     def next_vector_id(self) -> int:
-        doc = self.meta.find_one_and_update(
-            {"_id": "vector_seq"},
-            {"$inc": {"value": 1}},
-            upsert=True,
-            return_document=ReturnDocument.AFTER,
-        )
-        return int(doc.get("value", 0))
+        with self.lock:
+            self.vector_seq += 1
+            return self.vector_seq
 
     def save_embedding_meta(self, vector_id: int, message_id: str, thread_id: str) -> None:
-        self.embeddings.insert_one(
-            {
+        with self.lock:
+            self.embeddings[vector_id] = {
                 "vector_id": vector_id,
                 "message_id": message_id,
                 "threadId": thread_id,
                 "createdAt": _utc_now(),
             }
-        )
 
     def fetch_embedding_meta(
         self, vector_ids: list[int], thread_id: str
     ) -> list[dict[str, Any]]:
-        if not vector_ids:
-            return []
-        cursor = self.embeddings.find(
-            {"vector_id": {"$in": vector_ids}, "threadId": thread_id}
-        )
-        return list(cursor)
+        with self.lock:
+            return [
+                meta
+                for vector_id in vector_ids
+                if (meta := self.embeddings.get(vector_id))
+                and meta.get("threadId") == thread_id
+            ]
 
     def fetch_messages_by_ids(self, message_ids: list[str]) -> list[dict[str, Any]]:
-        if not message_ids:
-            return []
-        cursor = self.messages.find({"_id": {"$in": [ObjectId(m) for m in message_ids]}})
-        return list(cursor)
+        with self.lock:
+            return [self.messages[mid] for mid in message_ids if mid in self.messages]
 
 
 class FaissIndex:
@@ -499,7 +464,7 @@ class FaissIndex:
 
 
 class MemoryManager:
-    def __init__(self, store: MongoStore) -> None:
+    def __init__(self, store: InMemoryStore) -> None:
         self.store = store
         self.embed_model = os.getenv("OPENAI_EMBEDDINGS_MODEL", "text-embedding-3-small")
         self.api_key = os.getenv("OPENAI_API_KEY", "")
@@ -821,10 +786,8 @@ def create_app() -> Flask:
         create_app._cleanup_started = True
         print("[INIT] Started job cleanup thread")
 
-    mongo_uri = os.getenv("MONGO_URI", "mongodb://localhost:27017")
-    mongo_db = os.getenv("MONGO_DB", "finance_insight")
     api_key = os.getenv("API_KEY", "")
-    store = MongoStore(mongo_uri, mongo_db)
+    store = InMemoryStore()
     memory = MemoryManager(store)
 
     def check_auth() -> bool:
@@ -870,7 +833,6 @@ def create_app() -> Flask:
         return jsonify(
             {
                 "status": "ok",
-                "mongo": "ok" if store.ping() else "error",
                 "jobs": {
                     "total": job_count,
                     "pending": pending,
@@ -885,82 +847,22 @@ def create_app() -> Flask:
     @app.get("/config")
     def config():
         """Return which API services are configured"""
+        has_serpapi = bool(os.getenv("SERPAPI_API_KEY"))
+        has_news = has_serpapi
         return jsonify({
             "services": {
                 "openai": bool(os.getenv("OPENAI_API_KEY")),
-                "serper": bool(os.getenv("SERPER_API_KEY")),
-                "serpapi": bool(os.getenv("SERPAPI_API_KEY")),
+                "serpapi": has_serpapi,
                 "twelveData": bool(os.getenv("TWELVE_DATA_API_KEY")),
                 "alphaVantage": bool(os.getenv("ALPHAVANTAGE_API_KEY")),
             },
             "capabilities": {
-                "news_search": bool(os.getenv("SERPER_API_KEY") or os.getenv("SERPAPI_API_KEY")),
-                "market_data": bool(os.getenv("TWELVE_DATA_API_KEY")) or "stooq_fallback",
+                "news_search": has_news,
+                "market_data": bool(os.getenv("TWELVE_DATA_API_KEY")),
                 "fundamentals": bool(os.getenv("ALPHAVANTAGE_API_KEY")),
                 "ai_agents": bool(os.getenv("OPENAI_API_KEY")),
             }
         })
-
-    @app.get("/history")
-    def history():
-        thread_id = request.args.get("threadId", "").strip()
-        if not thread_id:
-            latest = store.latest_thread()
-            thread_id = latest.get("threadId") if latest else ""
-        if thread_id:
-            messages = store.list_messages(thread_id, limit=60, newest_first=False)
-        else:
-            messages = store.list_recent_messages(limit=60)
-        payload = [
-            {
-                "id": str(msg.get("_id")),
-                "role": msg.get("role"),
-                "content": msg.get("content"),
-                "createdAt": msg.get("createdAt").isoformat()
-                if msg.get("createdAt")
-                else None,
-            }
-            for msg in messages
-        ]
-        return jsonify(payload)
-
-    @app.get("/threads")
-    def threads():
-        cursor = store.threads.find().sort("updatedAt", -1).limit(50)
-        threads_list = []
-        for thread in cursor:
-            threads_list.append({
-                "id": thread.get("threadId"),
-                "title": thread.get("title", "Untitled"),
-                "summary": thread.get("summary", "")[:100],
-                "createdAt": thread.get("createdAt").isoformat() if thread.get("createdAt") else None,
-                "updatedAt": thread.get("updatedAt").isoformat() if thread.get("updatedAt") else None,
-            })
-        return jsonify(threads_list)
-
-    @app.get("/trace")
-    def trace():
-        thread_id = request.args.get("threadId", "").strip()
-        if not thread_id:
-            return jsonify({"error": "threadId is required"}), 400
-        events = store.list_traces(thread_id, limit=500)
-        payload = [
-            {
-                "id": str(event.get("_id")),
-                "type": event.get("type"),
-                "summary": event.get("summary"),
-                "task": event.get("task"),
-                "tool": event.get("tool"),
-                "agent": event.get("agent"),
-                "args": event.get("args"),
-                "output": event.get("output"),
-                "createdAt": event.get("createdAt").isoformat()
-                if event.get("createdAt")
-                else None,
-            }
-            for event in events
-        ]
-        return jsonify(payload)
 
     @app.post("/chat")
     def chat():
@@ -1266,6 +1168,8 @@ def create_app() -> Flask:
         def run_job():
             print(f"[JOB {job_id}] Starting background job")
             with jobs_lock:
+                if jobs[job_id]["status"] == JobStatus.CANCELLED:
+                    return
                 jobs[job_id]["status"] = JobStatus.RUNNING
                 jobs[job_id]["updated_at"] = _utc_now().isoformat()
             
@@ -1277,6 +1181,9 @@ def create_app() -> Flask:
 
                 conversation_summary = memory.build_summary(thread_id, message)
                 store.update_thread_summary(thread_id, conversation_summary)
+
+                if _is_job_cancelled(job_id):
+                    return
 
                 # Setup trace collection
                 traces: list[dict[str, Any]] = []
@@ -1344,6 +1251,11 @@ def create_app() -> Flask:
                         except Exception as e:
                             print(f"[JOB {job_id}] Error unsubscribing: {e}")
 
+                if _is_job_cancelled(job_id):
+                    with jobs_lock:
+                        jobs[job_id]["updated_at"] = _utc_now().isoformat()
+                    return
+
                 # Extract and save response
                 final_response, raw_output = _extract_final_response(result)
                 assistant_text = final_response or str(raw_output)
@@ -1352,6 +1264,9 @@ def create_app() -> Flask:
 
                 # Update job with result
                 with jobs_lock:
+                    if jobs[job_id]["status"] == JobStatus.CANCELLED:
+                        jobs[job_id]["updated_at"] = _utc_now().isoformat()
+                        return
                     jobs[job_id]["status"] = JobStatus.COMPLETED
                     jobs[job_id]["result"] = {
                         "reply": assistant_text,
@@ -1383,8 +1298,9 @@ def create_app() -> Flask:
                 import traceback
                 traceback.print_exc()
                 with jobs_lock:
-                    jobs[job_id]["status"] = JobStatus.FAILED
-                    jobs[job_id]["error"] = str(e)
+                    if jobs[job_id]["status"] != JobStatus.CANCELLED:
+                        jobs[job_id]["status"] = JobStatus.FAILED
+                        jobs[job_id]["error"] = str(e)
                     jobs[job_id]["updated_at"] = _utc_now().isoformat()
                 
                 # Clean up on error too
@@ -1413,6 +1329,23 @@ def create_app() -> Flask:
                 "updatedAt": job["updated_at"],
             })
 
+    @app.post("/chat/async/<job_id>/cancel")
+    def cancel_job(job_id: str):
+        """Cancel a running job (best effort)."""
+        with jobs_lock:
+            job = jobs.get(job_id)
+            if not job:
+                return jsonify({"error": "Job not found"}), 404
+
+            if job["status"] in [JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED]:
+                return jsonify({"jobId": job_id, "status": job["status"]})
+
+            job["status"] = JobStatus.CANCELLED
+            job["error"] = "Cancelled by user"
+            job["updated_at"] = _utc_now().isoformat()
+
+        return jsonify({"jobId": job_id, "status": JobStatus.CANCELLED})
+
     @app.get("/chat/async/<job_id>/result")
     def get_job_result(job_id: str):
         """Get final job result."""
@@ -1426,7 +1359,10 @@ def create_app() -> Flask:
             
             if job["status"] == JobStatus.FAILED:
                 return jsonify({"error": job["error"], "status": job["status"]}), 500
-            
+
+            if job["status"] == JobStatus.CANCELLED:
+                return jsonify({"error": job.get("error", "Job cancelled"), "status": job["status"]}), 409
+
             result = {
                 "jobId": job["id"],
                 "status": job["status"],

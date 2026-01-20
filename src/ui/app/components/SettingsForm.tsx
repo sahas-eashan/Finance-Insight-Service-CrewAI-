@@ -14,7 +14,6 @@ type Status = "idle" | "saving" | "saved" | "testing" | "connected" | "error";
 
 type ApiKeys = {
   openai: string;
-  serper: string;
   serpapi: string;
   twelveData: string;
   alphaVantage: string;
@@ -25,7 +24,6 @@ export default function SettingsForm() {
   const [apiKey, setApiKey] = useState("");
   const [keys, setKeys] = useState<ApiKeys>({
     openai: "",
-    serper: "",
     serpapi: "",
     twelveData: "",
     alphaVantage: "",
@@ -43,7 +41,14 @@ export default function SettingsForm() {
     const savedKeys = localStorage.getItem("financeApiKeys");
     if (savedKeys) {
       try {
-        setKeys(JSON.parse(savedKeys));
+        const parsed = JSON.parse(savedKeys) as Partial<ApiKeys> & {
+          serper?: string;
+        };
+        setKeys((prev) => ({
+          ...prev,
+          ...parsed,
+          serpapi: parsed.serpapi || parsed.serper || prev.serpapi,
+        }));
       } catch (e) {
         console.error("Failed to load API keys", e);
       }
@@ -89,12 +94,9 @@ export default function SettingsForm() {
   const handleExport = () => {
     const envContent = `# Finance Insight Service API Keys
 OPENAI_API_KEY=${keys.openai}
-SERPER_API_KEY=${keys.serper}
 SERPAPI_API_KEY=${keys.serpapi}
 TWELVE_DATA_API_KEY=${keys.twelveData}
 ALPHAVANTAGE_API_KEY=${keys.alphaVantage}
-MONGO_URI=mongodb://localhost:27017
-MONGO_DB=finance_insight
 `;
     
     const blob = new Blob([envContent], { type: 'text/plain' });
@@ -156,19 +158,7 @@ MONGO_DB=finance_insight
         </label>
 
         <label className="settings-field">
-          <span>Serper API Key</span>
-          <input
-            className="settings-input"
-            type="password"
-            value={keys.serper}
-            onChange={(e) => setKeys({ ...keys, serper: e.target.value })}
-            placeholder="Get from serper.dev"
-          />
-          <small style={{ fontSize: '11px', color: 'var(--text-muted)' }}>For news search (alternative to SerpAPI)</small>
-        </label>
-
-        <label className="settings-field">
-          <span>SerpAPI Key</span>
+          <span>SerpAPI API Key</span>
           <input
             className="settings-input"
             type="password"
@@ -176,7 +166,7 @@ MONGO_DB=finance_insight
             onChange={(e) => setKeys({ ...keys, serpapi: e.target.value })}
             placeholder="Get from serpapi.com"
           />
-          <small style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Alternative news search provider</small>
+          <small style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Required for news search</small>
         </label>
 
         <label className="settings-field">
@@ -188,7 +178,7 @@ MONGO_DB=finance_insight
             onChange={(e) => setKeys({ ...keys, twelveData: e.target.value })}
             placeholder="Get from twelvedata.com"
           />
-          <small style={{ fontSize: '11px', color: 'var(--text-muted)' }}>For market data (falls back to Stooq if missing)</small>
+          <small style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Required for market data</small>
         </label>
 
         <label className="settings-field">
@@ -218,13 +208,13 @@ MONGO_DB=finance_insight
                 <span style={{ color: capabilities.capabilities.news_search ? '#22c55e' : '#ef4444' }}>
                   {capabilities.capabilities.news_search ? '✓' : '✗'}
                 </span>
-                <span>News Search {capabilities.services.serper ? '(Serper)' : capabilities.services.serpapi ? '(SerpAPI)' : '(none)'}</span>
+                <span>News Search {capabilities.services.serpapi ? '(SerpAPI)' : '(missing)'}</span>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <span style={{ color: capabilities.services.twelveData ? '#22c55e' : '#fbbf24' }}>
                   {capabilities.services.twelveData ? '✓' : '○'}
                 </span>
-                <span>Market Data {capabilities.services.twelveData ? '(Twelve Data)' : '(Stooq fallback)'}</span>
+                <span>Market Data {capabilities.services.twelveData ? '(Twelve Data)' : '(missing)'}</span>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <span style={{ color: capabilities.services.alphaVantage ? '#22c55e' : '#ef4444' }}>

@@ -43,8 +43,8 @@ def main() -> None:
 
     if not os.getenv("OPENAI_API_KEY"):
         raise SystemExit("OPENAI_API_KEY is missing. Set it in your environment or .env.")
-    if not (os.getenv("SERPER_API_KEY") or os.getenv("SERPAPI_API_KEY")):
-        raise SystemExit("Set SERPER_API_KEY or SERPAPI_API_KEY for news search.")
+    if not os.getenv("SERPAPI_API_KEY"):
+        raise SystemExit("Set SERPAPI_API_KEY for news search.")
 
     tickers = [t.strip() for t in args.tickers.split(",") if t.strip()]
     sites = [s.strip() for s in args.sites.split(",") if s.strip()]

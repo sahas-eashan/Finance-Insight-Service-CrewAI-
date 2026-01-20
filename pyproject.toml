@@ -13,9 +13,7 @@ dependencies = [
   "numpy>=1.26.4",
   "openai>=1.40.0",
   "pandas>=2.2.2",
-  "pymongo>=4.6.0",
   "python-dotenv>=1.0.1",
-  "serpapi>=0.1.5",
 ]
 
 [project.scripts]

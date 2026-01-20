@@ -4,4 +4,5 @@ __pycache__
 *.pyc
 .env
 .env.*
-UI/node_modules
+src/ui/node_modules
+src/ui/.next

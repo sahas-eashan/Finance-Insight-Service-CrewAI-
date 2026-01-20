@@ -7,12 +7,6 @@ set -e
 echo "🚀 Starting Finance Insight Service..."
 echo ""
 
-# Check if MongoDB is running
-if ! systemctl is-active --quiet mongod; then
-    echo "⚠️  MongoDB is not running. Starting MongoDB..."
-    sudo systemctl start mongod
-fi
-
 # Start backend in background
 echo "📊 Starting backend API server on port 5000..."
 cd "$(dirname "$0")"
@@ -29,7 +23,7 @@ echo "✅ Backend is ready!"
 
 # Start frontend
 echo "🎨 Starting frontend UI on port 3000..."
-cd UI
+cd src/ui
 npm run dev &
 FRONTEND_PID=$!
 

@@ -29,6 +29,8 @@ The project uses FAISS (Facebook AI Similarity Search) for fast semantic retriev
 
 ## AMP / Choreo Deployment
 
+AMP repo: https://github.com/wso2/ai-agent-management-platform/tree/amp/v0
+
 ### Prerequisites
 - Kubernetes cluster (k3d or equivalent)
 - AMP installed (see AMP quick start guide)
@@ -82,7 +84,7 @@ Copy `.env.example` to `.env` and set these keys:
 - `TWELVE_DATA_API_KEY`
 - `ALPHAVANTAGE_API_KEY`
 
-See `API_KEYS.md` for key setup details.
+See `API_KEYS.md` for key setup details: `API_KEYS.md`.
 
 ## Contributing
 Open an issue or submit a pull request with clear context and test notes.

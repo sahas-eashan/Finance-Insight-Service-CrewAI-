@@ -84,7 +84,7 @@ Copy `.env.example` to `.env` and set these keys:
 - `TWELVE_DATA_API_KEY`
 - `ALPHAVANTAGE_API_KEY`
 
-See `API_KEYS.md` for key setup details: `API_KEYS.md`.
+See key setup details in [API_KEYS.md](API_KEYS.md).
 
 ## Contributing
 Open an issue or submit a pull request with clear context and test notes.

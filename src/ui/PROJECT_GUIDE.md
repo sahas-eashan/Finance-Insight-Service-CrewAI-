@@ -1,19 +1,19 @@
 # Finance Insight UI - Implementation & Backend Integration Guide
 
 This document summarizes the current UI, how the frontend is wired, and how it
-connects to the backend for a single-session, scenario-based chat.
+connects to the backend for a stateless, scenario-based report flow.
 
 ## What was implemented
 
 - Next.js (App Router + TypeScript) UI in `src/ui/`.
-- Scenario-based single-chat layout with a top bar and "New chat" button.
+- Scenario-based report layout with a top bar and "New request" button.
 - Dark/light mode toggle with smooth transitions.
 - Real typing input (textarea) with Enter-to-send.
 - Settings page for API URL + API key (stored locally).
 
 ## Key UI routes
 
-- `/` main chat UI
+- `/` main report UI
 - `/settings` API authentication + connection test
 
 ## How the frontend talks to your backend
@@ -22,7 +22,7 @@ Frontend integration lives in `src/ui/lib/api.ts`:
 
 - `GET /health` used by the Settings page test button.
 - `GET /config` used by the Settings page to show service status.
-- `POST /chat/async` used to send a message to the agent (polls for status).
+- `POST /chat/async` used to submit a report request (polls for status).
 
 ### Request headers
 
@@ -31,12 +31,11 @@ If an API key is set in `/settings`, the UI sends:
 - `Authorization: Bearer <apiKey>`
 - `X-API-Key: <apiKey>`
 
-### Message format expected by the UI
+### Result format expected by the UI
 
-The UI accepts either:
+The UI expects:
 
-- `{ reply: "text", threadId }`, OR
-- `{ messages: [ ... ], threadId }`
+- `{ result: { report: "text" } }`
 
 ### Environment option
 
@@ -50,9 +49,8 @@ The Settings page overrides this per browser (stored in `localStorage`).
 
 ## CrewAI integration notes
 
-- Put the CrewAI run inside `/chat` or `/chat/async`.
-- Return a single `reply` for the assistant output.
-- For multi-agent responses, you can return an array of messages instead of a single `reply`.
+- Run the CrewAI workflow inside `/chat/async`.
+- Return a single `report` string in the final result.
 
 ## Security notes
 

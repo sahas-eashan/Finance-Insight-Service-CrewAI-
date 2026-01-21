@@ -1,5 +1,3 @@
-import os
-
 from crewai import Agent, Crew, Process, Task
 from crewai.project import CrewBase, agent, crew, task
 from crewai_tools import ScrapeWebsiteTool
@@ -21,10 +19,9 @@ class FinanceInsightCrew:
 
     @agent
     def researcher(self) -> Agent:
-        search_tool = _build_search_tool()
         return Agent(
             config=self.agents_config["researcher"],
-            tools=[search_tool, ScrapeWebsiteTool()],
+            tools=[SerpApiNewsSearchTool(), ScrapeWebsiteTool()],
             verbose=True,
             allow_delegation=False,
         )
@@ -46,6 +43,14 @@ class FinanceInsightCrew:
     def auditor(self) -> Agent:
         return Agent(
             config=self.agents_config["auditor"],
+            verbose=True,
+            allow_delegation=False,
+        )
+
+    @agent
+    def reporter(self) -> Agent:
+        return Agent(
+            config=self.agents_config["reporter"],
             verbose=True,
             allow_delegation=False,
         )
@@ -74,19 +79,29 @@ class FinanceInsightCrew:
             name="audit_task",
         )
 
+    @task
+    def report_task(self) -> Task:
+        return Task(
+            config=self.tasks_config["report_task"],
+            agent=self.reporter(),
+            name="report_task",
+        )
+
     def build_crew(
         self, task_names: list[str] | None = None, include_all_agents: bool = True
     ) -> Crew:
         research_task = self.research_task()
         quant_task = self.quant_task()
         audit_task = self.audit_task()
+        report_task = self.report_task()
 
-        full_order = [research_task, quant_task, audit_task]
+        full_order = [research_task, quant_task, audit_task, report_task]
 
         task_map = {
             "research": research_task,
             "quant": quant_task,
             "audit": audit_task,
+            "report": report_task,
         }
         if task_names:
             unknown = [name for name in task_names if name not in task_map]
@@ -99,12 +114,14 @@ class FinanceInsightCrew:
         if set(selected_tasks) == set(full_order):
             quant_task.context = [research_task]
             audit_task.context = [research_task, quant_task]
+            report_task.context = [research_task, quant_task, audit_task]
 
         if include_all_agents:
             agents = [
                 self.researcher(),
                 self.quant(),
                 self.auditor(),
+                self.reporter(),
             ]
         else:
             selected_names = set(task_names or task_map.keys())
@@ -115,6 +132,8 @@ class FinanceInsightCrew:
                 agents.append(self.quant())
             if "audit" in selected_names:
                 agents.append(self.auditor())
+            if "report" in selected_names:
+                agents.append(self.reporter())
 
         crew_name = "finance_insight_crew"
 
@@ -132,8 +151,3 @@ class FinanceInsightCrew:
         """Creates the Finance Insight crew."""
         return self.build_crew()
 
-
-def _build_search_tool():
-    if os.getenv("SERPAPI_API_KEY"):
-        return SerpApiNewsSearchTool()
-    raise ValueError("Set SERPAPI_API_KEY to enable news search.")

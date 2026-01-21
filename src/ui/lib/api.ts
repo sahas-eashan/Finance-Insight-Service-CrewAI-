@@ -1,21 +1,10 @@
-export type ChatRole = "user" | "assistant" | "system";
-
-export type ChatMessage = {
-  id: string;
-  role: ChatRole;
-  content: string;
-  createdAt?: string;
-};
-
 export type ApiConfig = {
   baseUrl: string;
   apiKey?: string;
 };
 
-export type ChatResponse = {
-  reply?: string;
-  messages?: ChatMessage[];
-  threadId?: string;
+export type ReportResponse = {
+  report: string;
 };
 
 export type ServiceCapabilities = {
@@ -90,9 +79,8 @@ const isAbortError = (error: unknown) =>
 
 export const sendMessage = async (
   message: string,
-  threadId?: string,
   options?: SendOptions,
-): Promise<ChatResponse> => {
+): Promise<ReportResponse> => {
   const { baseUrl, apiKey } = getApiConfig();
   const onTrace = options?.onTrace;
   const signal = options?.signal;
@@ -105,7 +93,7 @@ export const sendMessage = async (
     startResponse = await fetch(`${baseUrl}/chat/async`, {
       method: "POST",
       headers: buildHeaders(apiKey),
-      body: JSON.stringify({ message, threadId }),
+      body: JSON.stringify({ message }),
       signal,
     });
   } catch (error) {
@@ -122,15 +110,15 @@ export const sendMessage = async (
   }
 
   const startData = await startResponse.json();
-  const { jobId, threadId: actualThreadId } = startData;
-  console.log('[API] Job started:', jobId, 'thread:', actualThreadId);
+  const { jobId } = startData;
+  console.log('[API] Job started:', jobId);
   options?.onJobId?.(jobId);
 
   // Poll for status
   const seenTraces = new Set<string>();
   let lastTraceCount = 0;
 
-  const pollStatus = async (): Promise<ChatResponse> => {
+  const pollStatus = async (): Promise<ReportResponse> => {
     while (true) {
       if (signal?.aborted) {
         throw new DOMException("Request cancelled", "AbortError");
@@ -154,7 +142,7 @@ export const sendMessage = async (
         // Emit new traces
         if (onTrace && statusData.traces) {
           for (const trace of statusData.traces) {
-            const traceKey = `${trace.timestamp}-${trace.message}`;
+            const traceKey = trace.seq ? `seq-${trace.seq}` : `${trace.timestamp}-${trace.message}`;
             if (!seenTraces.has(traceKey) && statusData.traceCount > lastTraceCount) {
               seenTraces.add(traceKey);
               onTrace(trace.message);
@@ -187,8 +175,7 @@ export const sendMessage = async (
           }
 
           return {
-            reply: resultData.result?.reply ?? "",
-            threadId: actualThreadId,
+            report: resultData.result?.report ?? "",
           };
         }
 

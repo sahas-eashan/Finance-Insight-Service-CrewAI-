@@ -7,15 +7,11 @@ import threading
 import time
 import uuid
 from datetime import datetime
-from typing import Any
 from enum import Enum
-
-import faiss
-import numpy as np
+from typing import Any
 from dotenv import load_dotenv
 from flask import Flask, jsonify, request
 from flask_cors import CORS
-from openai import OpenAI
 
 # Disable CrewAI interactive tracing prompt that causes timeout in containerized environments
 os.environ.setdefault("CREWAI_TRACING_ENABLED", "false")
@@ -27,9 +23,6 @@ from crewai.events import (
     TaskCompletedEvent,
     TaskFailedEvent,
     TaskStartedEvent,
-    ToolUsageErrorEvent,
-    ToolUsageFinishedEvent,
-    ToolUsageStartedEvent,
     crewai_event_bus,
 )
 from finance_insight_service.crew import FinanceInsightCrew
@@ -61,8 +54,6 @@ def _is_job_cancelled(job_id: str) -> bool:
 
 def _cleanup_expired_jobs():
     """Background thread to periodically clean up expired jobs."""
-    import time
-    
     while True:
         time.sleep(300)  # Check every 5 minutes
         try:
@@ -96,218 +87,6 @@ def _cleanup_expired_jobs():
             print(f"[CLEANUP] Error in cleanup thread: {e}")
 
 
-def _trim_text(value: str, limit: int = 400) -> str:
-    if len(value) <= limit:
-        return value
-    return value[:limit].rstrip() + "..."
-
-
-def _safe_json(value: Any) -> str:
-    try:
-        return json.dumps(value, ensure_ascii=True)
-    except TypeError:
-        return json.dumps(str(value), ensure_ascii=True)
-
-
-def _simplify_trace(event: dict[str, Any]) -> str:
-    """Convert trace event to human-readable message with detailed context."""
-    event_type = event.get("type")
-    agent = event.get("agent", "")
-    
-    if event_type == "crew_started":
-        return "Starting analysis"
-    
-    if event_type == "crew_completed":
-        return "Analysis complete"
-    
-    if event_type == "task_started":
-        task = event.get("task", "task")
-        if agent:
-            return f"Agent '{agent}' is working on {task}"
-        return f"Working on: {task}"
-    
-    if event_type == "task_completed":
-        task = event.get("task", "task")
-        output = event.get("output", {})
-        
-        # Parse output if it's a JSON string
-        task_result = output
-        if isinstance(output, str):
-            try:
-                task_result = json.loads(output)
-            except:
-                task_result = {}
-        
-        # Audit task completion - show status and reason
-        if "audit" in task.lower():
-            if isinstance(task_result, dict):
-                status = task_result.get("audit_status", "")
-                issues = task_result.get("issues", [])
-                
-                if status:
-                    msg = f"Audit {status.lower()}"
-                    # Add first issue if rejected/partial
-                    if issues and status in ["REJECTED", "PARTIAL"]:
-                        first_issue = issues[0] if isinstance(issues[0], dict) else {}
-                        problem = first_issue.get("problem", "")
-                        if problem:
-                            msg += f" - {problem[:80]}"
-                    return msg
-        
-        # Planner task completion - show selected tools
-        if "plan" in task.lower() or "manager" in task.lower():
-            if isinstance(task_result, dict):
-                plan = task_result.get("plan", {})
-                if isinstance(plan, dict):
-                    selected_tools = []
-                    if plan.get("use_research"):
-                        selected_tools.append("Research")
-                    if plan.get("use_quant"):
-                        selected_tools.append("Quant")
-                    if plan.get("use_audit"):
-                        selected_tools.append("Audit")
-                    
-                    if selected_tools:
-                        return f"Plan ready → Using: {', '.join(selected_tools)}"
-        
-        # Default task completion
-        if agent:
-            return f"Agent '{agent}' completed {task}"
-        return f"Completed: {task}"
-    
-    if event_type == "tool_started":
-        tool = event.get("tool", "")
-        args = event.get("args", {})
-        agent_prefix = f"{agent} is " if agent else "Agent is "
-        
-        # Web scraping/reading tools
-        if "scrape" in tool.lower() or "website" in tool.lower() or "read" in tool.lower():
-            url = args.get("url", args.get("website_url", ""))
-            if url:
-                # Extract clean domain from URL
-                domain = url.split('/')[2] if '://' in url else url.split('/')[0]
-                # Remove www. prefix
-                domain = domain.replace('www.', '')
-                return f"{agent_prefix}reading from {domain}"
-            return f"{agent_prefix}reading website content"
-        
-        # Search tools
-        if "search" in tool.lower() or "serp" in tool.lower():
-            query = args.get("query", args.get("search_query", ""))
-            if query:
-                return f"{agent_prefix}searching web: '{query[:60]}'"
-            return f"{agent_prefix}searching the web"
-        
-        # Fundamentals tools
-        if "company_fundamentals" in tool.lower():
-            ticker = args.get("ticker", args.get("symbol", ""))
-            if ticker:
-                return f"{agent_prefix}analyzing fundamentals for {ticker}"
-            return f"{agent_prefix}fetching financial data"
-
-        # Market data tools
-        if "price_history" in tool.lower():
-            ticker = args.get("ticker", args.get("symbol", ""))
-            if ticker:
-                return f"{agent_prefix}getting market data for {ticker}"
-            return f"{agent_prefix}fetching market data"
-        
-        return f"{agent_prefix}using {tool}"
-    
-    if event_type == "tool_completed":
-        tool = event.get("tool", "")
-        output = event.get("output", {})
-        args = event.get("args", {})
-        
-        # Web scraping completion
-        if "scrape" in tool.lower() or "website" in tool.lower() or "read" in tool.lower():
-            url = args.get("url", args.get("website_url", ""))
-            if url:
-                # Extract clean domain name
-                domain = url.split('/')[2] if '://' in url else url.split('/')[0]
-                # Remove www. prefix for cleaner display
-                domain = domain.replace('www.', '')
-                return f"Completed reading from {domain}"
-            return "Website content retrieved"
-        
-        # Search completion
-        if "search" in tool.lower() or "serp" in tool.lower():
-            if isinstance(output, dict):
-                results = output.get("results", [])
-                if results and len(results) > 0:
-                    # Try to get first result title/snippet
-                    first_result = results[0] if isinstance(results[0], dict) else {}
-                    title = first_result.get("title", first_result.get("name", ""))
-                    snippet = first_result.get("snippet", first_result.get("description", ""))
-                    
-                    msg = f"Found {len(results)} results"
-                    if title:
-                        msg += f" → Top: {title[:150]}"
-                    elif snippet:
-                        msg += f" → {snippet[:150]}"
-                    return msg
-            return "Web search completed"
-        
-        # Fundamentals completion
-        if "company_fundamentals" in tool.lower():
-            ticker = args.get("ticker", args.get("symbol", ""))
-            msg = "Retrieved financial data"
-            if ticker:
-                msg += f" for {ticker}"
-            
-            # Try to extract key metrics from output
-            if isinstance(output, dict):
-                metrics = []
-                # Look for common financial metrics
-                if "output_preview" in output:
-                    preview = str(output["output_preview"])[:80]
-                    if preview:
-                        msg += f" → {preview}..."
-                        return msg
-                        
-                for key in ["market_cap", "pe_ratio", "revenue", "eps", "price"]:
-                    if key in output and output[key]:
-                        metrics.append(f"{key.replace('_', ' ')}: {output[key]}")
-                if metrics:
-                    msg += f" → {', '.join(metrics[:2])}"
-            return msg
-        
-        # Market data completion
-        if "price_history" in tool.lower():
-            ticker = args.get("ticker", args.get("symbol", ""))
-            msg = "Retrieved market data"
-            if ticker:
-                msg += f" for {ticker}"
-            
-            if isinstance(output, dict):
-                # Try to extract price/data info
-                if "output_preview" in output:
-                    preview = str(output["output_preview"])[:80]
-                    if preview:
-                        msg += f" → {preview}..."
-                        return msg
-                        
-                price = output.get("price", output.get("last_price", output.get("close", "")))
-                if price:
-                    msg += f" → Price: {price}"
-            return msg
-        
-        # Generic tool completion with output preview
-        msg = f"Completed {tool}"
-        if isinstance(output, dict) and "output_preview" in output:
-            preview = str(output["output_preview"])[:200]
-            if preview:
-                msg += f" → {preview}"
-        elif isinstance(output, str) and output.strip():
-            preview = output.strip()[:200]
-            msg += f" → {preview}"
-        
-        return msg
-    
-    # Fallback
-    return event.get("summary", "Processing")
-
-
 def _normalize_list(value: Any) -> list[str]:
     if value is None:
         return []
@@ -329,271 +108,44 @@ def _build_search_query(query: str, tickers: Any, sites: Any) -> str:
     return " ".join(parts).strip()
 
 
-class InMemoryStore:
-    def __init__(self) -> None:
-        self.threads: dict[str, dict[str, Any]] = {}
-        self.messages: dict[str, dict[str, Any]] = {}
-        self.messages_by_thread: dict[str, list[str]] = {}
-        self.embeddings: dict[int, dict[str, Any]] = {}
-        self.vector_seq = 0
-        self.lock = threading.Lock()
-
-    def ping(self) -> bool:
-        return True
-
-    def create_thread(self, title: str) -> str:
-        now = _utc_now()
-        thread_id = str(uuid.uuid4())
-        with self.lock:
-            self.threads[thread_id] = {
-                "threadId": thread_id,
-                "title": title,
-                "createdAt": now,
-                "updatedAt": now,
-                "summary": "",
-            }
-            self.messages_by_thread[thread_id] = []
-        return thread_id
-
-    def get_thread(self, thread_id: str) -> dict[str, Any] | None:
-        with self.lock:
-            return self.threads.get(thread_id)
-
-    def update_thread_summary(self, thread_id: str, summary: str) -> None:
-        with self.lock:
-            thread = self.threads.get(thread_id)
-            if not thread:
-                return
-            thread["summary"] = summary
-            thread["updatedAt"] = _utc_now()
-
-    def touch_thread(self, thread_id: str) -> None:
-        with self.lock:
-            thread = self.threads.get(thread_id)
-            if not thread:
-                return
-            thread["updatedAt"] = _utc_now()
-
-    def add_message(
-        self, thread_id: str, role: str, content: str, metadata: dict[str, Any] | None
-    ) -> str:
-        now = _utc_now()
-        message_id = str(uuid.uuid4())
-        with self.lock:
-            self.messages[message_id] = {
-                "_id": message_id,
-                "threadId": thread_id,
-                "role": role,
-                "content": content,
-                "createdAt": now,
-                "metadata": metadata or {},
-            }
-            self.messages_by_thread.setdefault(thread_id, []).append(message_id)
-            thread = self.threads.get(thread_id)
-            if thread:
-                thread["updatedAt"] = now
-        return message_id
-
-    def list_messages(
-        self, thread_id: str, limit: int = 30, newest_first: bool = False
-    ) -> list[dict[str, Any]]:
-        with self.lock:
-            message_ids = list(self.messages_by_thread.get(thread_id, []))
-            messages = [self.messages[mid] for mid in message_ids if mid in self.messages]
-        messages.sort(key=lambda m: m.get("createdAt") or _utc_now(), reverse=newest_first)
-        return messages[:limit]
-
-    def next_vector_id(self) -> int:
-        with self.lock:
-            self.vector_seq += 1
-            return self.vector_seq
-
-    def save_embedding_meta(self, vector_id: int, message_id: str, thread_id: str) -> None:
-        with self.lock:
-            self.embeddings[vector_id] = {
-                "vector_id": vector_id,
-                "message_id": message_id,
-                "threadId": thread_id,
-                "createdAt": _utc_now(),
-            }
-
-    def fetch_embedding_meta(
-        self, vector_ids: list[int], thread_id: str
-    ) -> list[dict[str, Any]]:
-        with self.lock:
-            return [
-                meta
-                for vector_id in vector_ids
-                if (meta := self.embeddings.get(vector_id))
-                and meta.get("threadId") == thread_id
-            ]
-
-    def fetch_messages_by_ids(self, message_ids: list[str]) -> list[dict[str, Any]]:
-        with self.lock:
-            return [self.messages[mid] for mid in message_ids if mid in self.messages]
+def _format_task_label(task_name: str | None) -> str:
+    name = (task_name or "").lower()
+    if "research" in name:
+        return "Research"
+    if "quant" in name:
+        return "Quant"
+    if "audit" in name:
+        return "Audit"
+    if "report" in name:
+        return "Report"
+    return (task_name or "Task").replace("_", " ").title()
 
 
-class FaissIndex:
-    def __init__(self, index_path: str) -> None:
-        self.index_path = index_path
-        self.lock = threading.Lock()
-        self.index: faiss.Index | None = None
-        self._load()
-
-    def _load(self) -> None:
-        if os.path.exists(self.index_path):
-            self.index = faiss.read_index(self.index_path)
-
-    def _init(self, dim: int) -> None:
-        base = faiss.IndexFlatIP(dim)
-        self.index = faiss.IndexIDMap2(base)
-
-    def add(self, vector_id: int, vector: np.ndarray) -> None:
-        with self.lock:
-            if self.index is None:
-                self._init(vector.shape[1])
-            self.index.add_with_ids(vector, np.array([vector_id], dtype=np.int64))
-            faiss.write_index(self.index, self.index_path)
-
-    def search(self, vector: np.ndarray, top_k: int) -> tuple[list[int], list[float]]:
-        with self.lock:
-            if self.index is None or self.index.ntotal == 0:
-                return [], []
-            scores, ids = self.index.search(vector, top_k)
-        return ids[0].tolist(), scores[0].tolist()
-
-
-class MemoryManager:
-    def __init__(self, store: InMemoryStore) -> None:
-        self.store = store
-        self.embed_model = os.getenv("OPENAI_EMBEDDINGS_MODEL", "text-embedding-3-small")
-        self.api_key = os.getenv("OPENAI_API_KEY", "")
-        self.openai_client = OpenAI(api_key=self.api_key) if self.api_key else None
-        data_dir = os.getenv("FAISS_DATA_DIR", "data")
-        os.makedirs(data_dir, exist_ok=True)
-        index_path = os.getenv("FAISS_INDEX_PATH", os.path.join(data_dir, "faiss.index"))
-        self.index = FaissIndex(index_path)
-
-    def _embed(self, text: str) -> np.ndarray | None:
-        if not text.strip():
-            return None
-        if not self.openai_client:
-            return None
-        try:
-            response = self.openai_client.embeddings.create(
-                model=self.embed_model,
-                input=[text],
-            )
-        except Exception:
-            return None
-        vector = np.array([response.data[0].embedding], dtype=np.float32)
-        faiss.normalize_L2(vector)
-        return vector
-
-    def add_message_embedding(self, message_id: str, thread_id: str, content: str) -> None:
-        vector = self._embed(content)
-        if vector is None:
-            return
-        vector_id = self.store.next_vector_id()
-        self.index.add(vector_id, vector)
-        self.store.save_embedding_meta(vector_id, message_id, thread_id)
-
-    def search_related(
-        self, thread_id: str, query: str, top_k: int = 6
-    ) -> list[dict[str, Any]]:
-        vector = self._embed(query)
-        if vector is None:
-            return []
-        ids, scores = self.index.search(vector, top_k)
-        ids = [int(val) for val in ids if val != -1]
-        meta = self.store.fetch_embedding_meta(ids, thread_id)
-        meta_map = {m["vector_id"]: m for m in meta}
-        message_ids = [m["message_id"] for m in meta]
-        messages = self.store.fetch_messages_by_ids(message_ids)
-        message_map = {str(m["_id"]): m for m in messages}
-        results = []
-        for vector_id, score in zip(ids, scores, strict=False):
-            meta_item = meta_map.get(vector_id)
-            if not meta_item:
+def _extract_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        if "final_response" in value:
+            return str(value["final_response"])
+        if "report" in value:
+            return str(value["report"])
+    for attr in ("raw", "output", "json"):
+        if hasattr(value, attr):
+            try:
+                extracted = getattr(value, attr)
+            except Exception:
                 continue
-            message = message_map.get(meta_item["message_id"])
-            if not message:
-                continue
-            results.append(
-                {
-                    "message_id": meta_item["message_id"],
-                    "role": message.get("role"),
-                    "content": message.get("content"),
-                    "score": score,
-                }
-            )
-        return results
-
-    def build_summary(self, thread_id: str, query: str) -> str:
-        recent = self.store.list_messages(thread_id, limit=6, newest_first=True)
-        recent = list(reversed(recent))
-        related = self.search_related(thread_id, query, top_k=6)
-        seen = set()
-        lines = []
-        if recent:
-            lines.append("Recent messages:")
-            for msg in recent:
-                msg_id = str(msg.get("_id"))
-                seen.add(msg_id)
-                content = _trim_text(str(msg.get("content", "")), 240)
-                lines.append(f"- {msg.get('role')}: {content}")
-        if related:
-            lines.append("Relevant past context:")
-            for item in related:
-                if item["message_id"] in seen:
-                    continue
-                content = _trim_text(str(item.get("content", "")), 200)
-                lines.append(f"- {item.get('role')}: {content}")
-        return "\n".join(lines).strip()
-
-
-def _sanitize_tool_args(tool_name: str, tool_args: Any) -> dict[str, Any]:
-    if not isinstance(tool_args, dict):
-        return {"raw": _trim_text(str(tool_args), 300)}
-    if tool_name == "safe_python_exec":
-        code = tool_args.get("code", "")
-        data_json = tool_args.get("data_json")
-        data_type = type(data_json).__name__
-        data_len = None
-        if isinstance(data_json, list):
-            data_len = len(data_json)
-        elif isinstance(data_json, dict):
-            data_len = len(data_json.keys())
-        return {
-            "code_preview": _trim_text(str(code), 500),
-            "data_type": data_type,
-            "data_length": data_len,
-        }
-    sanitized = {}
-    for key, value in tool_args.items():
-        sanitized[key] = _trim_text(str(value), 300) if isinstance(value, str) else value
-    return sanitized
-
-
-def _summarize_tool_output(tool_name: str, output: Any) -> dict[str, Any]:
-    if tool_name == "safe_python_exec":
-        try:
-            parsed = json.loads(output) if isinstance(output, str) else output
-        except Exception:
-            return {"status": "unknown", "output_preview": _trim_text(str(output), 300)}
-        return {
-            "status": parsed.get("status"),
-            "error": parsed.get("error"),
-        }
-    if isinstance(output, (dict, list)):
-        return {"output_preview": _trim_text(_safe_json(output), 300)}
-    return {"output_preview": _trim_text(str(output), 300)}
+            if extracted:
+                return str(extracted)
+    return str(value)
 
 
 def _extract_final_response(raw: Any) -> tuple[str, Any]:
     if raw is None:
         return "", raw
-    text = raw if isinstance(raw, str) else str(raw)
+    text = _extract_text(raw)
     stripped = text.strip()
     if not stripped:
         return "", raw
@@ -601,12 +153,15 @@ def _extract_final_response(raw: Any) -> tuple[str, Any]:
         parsed = json.loads(stripped)
     except json.JSONDecodeError:
         return stripped, raw
-    if isinstance(parsed, dict) and parsed.get("final_response"):
-        return str(parsed["final_response"]), parsed
+    if isinstance(parsed, dict):
+        if parsed.get("final_response"):
+            return str(parsed["final_response"]), parsed
+        if parsed.get("report"):
+            return str(parsed["report"]), parsed
     return stripped, parsed
 
 
-def _build_inputs(payload: dict[str, Any], conversation_summary: str) -> dict[str, Any]:
+def _build_inputs(payload: dict[str, Any]) -> dict[str, Any]:
     user_request = payload.get("message", "")
     query = payload.get("query") or user_request
     tickers = payload.get("tickers", "")
@@ -623,37 +178,19 @@ def _build_inputs(payload: dict[str, Any], conversation_summary: str) -> dict[st
     # Get current date/time to provide context
     current_date = datetime.now().strftime("%Y-%m-%d")
     current_year = datetime.now().year
-    current_month = datetime.now().strftime("%B")
-
-    runtime_defaults = {
-        "user_request": user_request,
-        "current_date": current_date,
-        "current_year": current_year,
-        "current_month": current_month,
-        "symbol": symbol,
-        "interval": interval,
-        "outputsize": outputsize,
-        "horizon_days": horizon_days,
-        "provided_data": provided_data,
-        "query": query,
-        "tickers": tickers,
-        "sites": sites,
-        "days": int(payload.get("days", 7) or 7),
-        "max_articles": int(payload.get("max_articles", 8) or 8),
-    }
+    days = int(payload.get("days", 7) or 7)
+    max_articles = int(payload.get("max_articles", 8) or 8)
 
     return {
         "user_request": user_request,
         "current_date": current_date,
         "current_year": current_year,
-        "conversation_summary": conversation_summary,
-        "runtime_defaults": json.dumps(runtime_defaults),
         "sources_requested": str(bool(payload.get("sources_requested"))),
         "query": query,
         "tickers": tickers,
         "sites": sites,
-        "days": runtime_defaults["days"],
-        "max_articles": runtime_defaults["max_articles"],
+        "days": days,
+        "max_articles": max_articles,
         "search_query": search_query,
         "symbol": symbol,
         "interval": interval,
@@ -662,108 +199,6 @@ def _build_inputs(payload: dict[str, Any], conversation_summary: str) -> dict[st
         "request": user_request,
         "provided_data": provided_data,
     }
-
-
-def _collect_traces() -> tuple[list[dict[str, Any]], threading.Lock]:
-    traces: list[dict[str, Any]] = []
-    lock = threading.Lock()
-
-    def record(entry: dict[str, Any]) -> None:
-        with lock:
-            traces.append(entry)
-
-    @crewai_event_bus.on(CrewKickoffStartedEvent)
-    def _crew_started(_source, _event):
-        record({"type": "crew_started", "summary": "Crew execution started"})
-
-    @crewai_event_bus.on(CrewKickoffCompletedEvent)
-    def _crew_completed(_source, _event):
-        record({"type": "crew_completed", "summary": "Crew execution completed"})
-
-    @crewai_event_bus.on(CrewKickoffFailedEvent)
-    def _crew_failed(_source, _event):
-        record({"type": "crew_failed", "summary": "Crew execution failed"})
-
-    @crewai_event_bus.on(TaskStartedEvent)
-    def _task_started(_source, event):
-        task_name = getattr(event.task, "name", None) or "task"
-        agent = getattr(getattr(event.task, "agent", None), "role", None)
-        record(
-            {
-                "type": "task_started",
-                "task": task_name,
-                "agent": agent,
-                "summary": f"Started {task_name}",
-            }
-        )
-
-    @crewai_event_bus.on(TaskCompletedEvent)
-    def _task_completed(_source, event):
-        task_name = getattr(event.task, "name", None) or "task"
-        agent = getattr(getattr(event.task, "agent", None), "role", None)
-        output = getattr(event.task_output, "raw", None) if hasattr(event, "task_output") else None
-        record(
-            {
-                "type": "task_completed",
-                "task": task_name,
-                "agent": agent,
-                "summary": f"Completed {task_name}",
-                "output": _trim_text(str(output), 800) if output else None,
-            }
-        )
-
-    @crewai_event_bus.on(TaskFailedEvent)
-    def _task_failed(_source, event):
-        task_name = getattr(event.task, "name", None) or "task"
-        agent = getattr(getattr(event.task, "agent", None), "role", None)
-        record(
-            {
-                "type": "task_failed",
-                "task": task_name,
-                "agent": agent,
-                "summary": f"Failed {task_name}",
-            }
-        )
-
-    @crewai_event_bus.on(ToolUsageStartedEvent)
-    def _tool_started(_source, event):
-        record(
-            {
-                "type": "tool_started",
-                "tool": event.tool_name,
-                "agent": event.agent_role,
-                "task": event.task_name,
-                "args": _sanitize_tool_args(event.tool_name, event.tool_args),
-                "summary": f"Tool start: {event.tool_name}",
-            }
-        )
-
-    @crewai_event_bus.on(ToolUsageFinishedEvent)
-    def _tool_finished(_source, event):
-        record(
-            {
-                "type": "tool_completed",
-                "tool": event.tool_name,
-                "agent": event.agent_role,
-                "task": event.task_name,
-                "output": _summarize_tool_output(event.tool_name, event.output),
-                "summary": f"Tool done: {event.tool_name}",
-            }
-        )
-
-    @crewai_event_bus.on(ToolUsageErrorEvent)
-    def _tool_error(_source, event):
-        record(
-            {
-                "type": "tool_failed",
-                "tool": event.tool_name,
-                "agent": event.agent_role,
-                "task": event.task_name,
-                "summary": f"Tool failed: {event.tool_name}",
-            }
-        )
-
-    return traces, lock
 
 
 def create_app() -> Flask:
@@ -787,8 +222,6 @@ def create_app() -> Flask:
         print("[INIT] Started job cleanup thread")
 
     api_key = os.getenv("API_KEY", "")
-    store = InMemoryStore()
-    memory = MemoryManager(store)
 
     def check_auth() -> bool:
         if not api_key:
@@ -864,392 +297,141 @@ def create_app() -> Flask:
             }
         })
 
-    @app.post("/chat")
-    def chat():
-        """Stream chat response with real-time trace updates via SSE."""
-        payload = request.get_json(force=True) or {}
-        message = str(payload.get("message", "")).strip()
-        if not message:
-            return jsonify({"error": "Empty message"}), 400
-
-        thread_id = str(payload.get("threadId", "")).strip()
-        if thread_id and not store.get_thread(thread_id):
-            thread_id = ""
-        if not thread_id:
-            thread_id = store.create_thread(message[:60])
-
-        user_message_id = store.add_message(thread_id, "user", message, {})
-        memory.add_message_embedding(user_message_id, thread_id, message)
-
-        conversation_summary = memory.build_summary(thread_id, message)
-        store.update_thread_summary(thread_id, conversation_summary)
-
-        # Log related past conversations for debugging
-        related = memory.search_related(thread_id, message, top_k=3)
-        if related:
-            print(f"📚 Found {len(related)} related past conversations")
-            for rel in related:
-                print(f"  - Score: {rel['score']:.3f} | {rel['content'][:80]}...")
-
-        def generate_stream():
-            """Generate SSE stream with real-time trace updates."""
-            print("[STREAM] Starting SSE stream generation")
-            traces: list[dict[str, Any]] = []
-            events_to_send: list[str] = []
-            lock = threading.Lock()
-
-            def emit_trace(entry: dict[str, Any]) -> None:
-                print(f"[EMIT_TRACE] Called with type={entry.get('type')}")
-                with lock:
-                    traces.append(entry)
-                    # Queue simplified message to send
-                    simple_msg = _simplify_trace(entry)
-                    event_data = json.dumps({
-                        "type": "trace",
-                        "message": simple_msg,
-                        "detail": {
-                            "type": entry.get("type"),
-                            "agent": entry.get("agent"),
-                            "task": entry.get("task"),
-                            "tool": entry.get("tool"),
-                        }
-                    })
-                    events_to_send.append(f"data: {event_data}\n\n")
-                    print(f"[TRACE] {simple_msg}")  # Debug log
-                    print(f"[EMIT_TRACE] Queued event, total in queue: {len(events_to_send)}")
-
-            @crewai_event_bus.on(CrewKickoffStartedEvent)
-            def _crew_started(_source, _event):
-                emit_trace({"type": "crew_started", "summary": "Crew execution started"})
-
-            @crewai_event_bus.on(CrewKickoffCompletedEvent)
-            def _crew_completed(_source, _event):
-                emit_trace({"type": "crew_completed", "summary": "Crew execution completed"})
-
-            @crewai_event_bus.on(CrewKickoffFailedEvent)
-            def _crew_failed(_source, _event):
-                emit_trace({"type": "crew_failed", "summary": "Crew execution failed"})
-
-            @crewai_event_bus.on(TaskStartedEvent)
-            def _task_started(_source, event):
-                task_name = getattr(event.task, "name", None) or "task"
-                agent = getattr(getattr(event.task, "agent", None), "role", None)
-                emit_trace({
-                    "type": "task_started",
-                    "task": task_name,
-                    "agent": agent,
-                    "summary": f"Started {task_name}",
-                })
-
-            @crewai_event_bus.on(TaskCompletedEvent)
-            def _task_completed(_source, event):
-                task_name = getattr(event.task, "name", None) or "task"
-                agent = getattr(getattr(event.task, "agent", None), "role", None)
-                output = getattr(event.task_output, "raw", None) if hasattr(event, "task_output") else None
-                emit_trace({
-                    "type": "task_completed",
-                    "task": task_name,
-                    "agent": agent,
-                    "summary": f"Completed {task_name}",
-                    "output": _trim_text(str(output), 800) if output else None,
-                })
-
-            @crewai_event_bus.on(TaskFailedEvent)
-            def _task_failed(_source, event):
-                task_name = getattr(event.task, "name", None) or "task"
-                agent = getattr(getattr(event.task, "agent", None), "role", None)
-                emit_trace({
-                    "type": "task_failed",
-                    "task": task_name,
-                    "agent": agent,
-                    "summary": f"Failed {task_name}",
-                })
-
-            @crewai_event_bus.on(ToolUsageStartedEvent)
-            def _tool_started(_source, event):
-                emit_trace({
-                    "type": "tool_started",
-                    "tool": event.tool_name,
-                    "agent": event.agent_role,
-                    "task": event.task_name,
-                    "args": _sanitize_tool_args(event.tool_name, event.tool_args),
-                    "summary": f"Tool start: {event.tool_name}",
-                })
-
-            @crewai_event_bus.on(ToolUsageFinishedEvent)
-            def _tool_finished(_source, event):
-                emit_trace({
-                    "type": "tool_completed",
-                    "tool": event.tool_name,
-                    "agent": event.agent_role,
-                    "task": event.task_name,
-                    "args": _sanitize_tool_args(event.tool_name, event.tool_args),
-                    "output": _summarize_tool_output(event.tool_name, event.output),
-                    "summary": f"Tool done: {event.tool_name}",
-                })
-
-            @crewai_event_bus.on(ToolUsageErrorEvent)
-            def _tool_error(_source, event):
-                emit_trace({
-                    "type": "tool_failed",
-                    "tool": event.tool_name,
-                    "agent": event.agent_role,
-                    "task": event.task_name,
-                    "summary": f"Tool failed: {event.tool_name}",
-                })
-
-            # Execute crew with scoped handlers
-            inputs = _build_inputs(payload, conversation_summary)
-            print(f"[STREAM] Starting crew execution with inputs: {list(inputs.keys())}")
-            
-            # Flag to track completion
-            execution_complete = threading.Event()
-            execution_result = {}
-            
-            def run_crew():
-                try:
-                    print("[CREW] Starting crew thread")
-                    crew = FinanceInsightCrew().build_crew()
-                    print("[CREW] Crew built, starting kickoff")
-                    result = crew.kickoff(inputs=inputs)
-                    execution_result['result'] = result
-                    print("[CREW] Crew execution completed successfully")
-                except Exception as e:
-                    print(f"[CREW] Error during execution: {e}")
-                    import traceback
-                    traceback.print_exc()
-                    execution_result['error'] = str(e)
-                finally:
-                    execution_complete.set()
-                    print("[CREW] Crew thread finished")
-            
-            # Start crew execution in background
-            crew_thread = threading.Thread(target=run_crew)
-            crew_thread.start()
-            print("[STREAM] Crew thread started, beginning event polling")
-            
-            # Stream events as they come in with keepalive
-            events_sent = 0
-            keepalive_counter = 0
-            last_event_time = time.time()
-            KEEPALIVE_INTERVAL = 10  # Send keepalive every 10 seconds
-            
-            while not execution_complete.is_set():
-                with lock:
-                    while events_to_send:
-                        event = events_to_send.pop(0)
-                        events_sent += 1
-                        last_event_time = time.time()
-                        print(f"[STREAM] Yielding event #{events_sent}")
-                        yield event
-                
-                # Send keepalive as data event if no events for KEEPALIVE_INTERVAL seconds
-                current_time = time.time()
-                if current_time - last_event_time > KEEPALIVE_INTERVAL:
-                    keepalive_counter += 1
-                    last_event_time = current_time
-                    # Send as data event so proxies recognize it as activity
-                    keepalive_msg = f"data: {json.dumps({'type': 'heartbeat', 'count': keepalive_counter})}\n\n"
-                    print(f"[STREAM] Sending heartbeat #{keepalive_counter}")
-                    yield keepalive_msg
-                
-                execution_complete.wait(timeout=0.5)  # Check every 500ms
-            
-            print(f"[STREAM] Execution complete, sending remaining events")
-            # Yield any remaining events
-            with lock:
-                while events_to_send:
-                    event = events_to_send.pop(0)
-                    events_sent += 1
-                    print(f"[STREAM] Yielding final event #{events_sent}")
-                    yield event
-            
-            # Wait for thread to complete
-            crew_thread.join()
-            print(f"[STREAM] Crew thread joined, total events sent: {events_sent}")
-            
-            # Check for errors
-            if 'error' in execution_result:
-                print(f"[STREAM] Crew execution error: {execution_result['error']}")
-                yield f"data: {json.dumps({'type': 'error', 'message': execution_result['error']})}\n\n"
-                return
-            
-            result = execution_result.get('result')
-            if not result:
-                print("[STREAM] No result from crew execution")
-                yield f"data: {json.dumps({'type': 'error', 'message': 'No result from crew'})}\n\n"
-                return
-
-            print("[STREAM] Extracting final response")
-            # Extract and save response  
-            try:
-                final_response, raw_output = _extract_final_response(result)
-                assistant_text = final_response or str(raw_output)
-                print(f"[STREAM] Assistant response length: {len(assistant_text)} chars")
-                
-                print("[STREAM] Saving to MongoDB")
-                assistant_id = store.add_message(thread_id, "assistant", assistant_text, {})
-                print(f"[STREAM] Message saved with ID: {assistant_id}")
-                
-                print("[STREAM] Adding embedding")
-                memory.add_message_embedding(assistant_id, thread_id, assistant_text)
-                print("[STREAM] Embedding added")
-                
-                # Send final response
-                trace_payload = [
-                    {
-                        "type": event.get("type"),
-                        "agent": event.get("agent"),
-                        "task": event.get("task"),
-                        "tool": event.get("tool"),
-                        "output": event.get("output"),
-                        "summary": event.get("summary"),
-                    }
-                    for event in traces
-                ]
-                
-                final_data = json.dumps({
-                    "type": "response",
-                    "reply": assistant_text,
-                    "threadId": thread_id,
-                    "traces": trace_payload,
-                })
-                print(f"[STREAM] Sending final response, payload size: {len(final_data)} bytes")
-                yield f"data: {final_data}\n\n"
-                print("[STREAM] Final response sent successfully")
-            except Exception as e:
-                print(f"[STREAM] Error preparing final response: {e}")
-                import traceback
-                traceback.print_exc()
-                yield f"data: {json.dumps({'type': 'error', 'message': f'Error preparing response: {str(e)}'})}\n\n"
-
-        return app.response_class(
-            generate_stream(),
-            mimetype="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "X-Accel-Buffering": "no",
-            }
-        )
-
-    # ============= NEW ASYNC JOB-BASED ENDPOINTS =============
+    # ============= ASYNC JOB-BASED ENDPOINTS =============
     
     @app.post("/chat/async")
     def chat_async():
-        """Start async chat job and return job ID immediately."""
+        """Start async report job and return job ID immediately."""
         payload = request.get_json(force=True) or {}
         message = str(payload.get("message", "")).strip()
         if not message:
             return jsonify({"error": "Empty message"}), 400
 
-        thread_id = str(payload.get("threadId", "")).strip()
-        if thread_id and not store.get_thread(thread_id):
-            thread_id = ""
-        if not thread_id:
-            thread_id = store.create_thread(message[:60])
-
         # Create job
         job_id = str(uuid.uuid4())
-        
+
         with jobs_lock:
             jobs[job_id] = {
                 "id": job_id,
                 "status": JobStatus.PENDING,
-                "thread_id": thread_id,
-                "message": message,
+                "request": message,
                 "traces": [],
                 "result": None,
                 "error": None,
                 "created_at": _utc_now().isoformat(),
                 "updated_at": _utc_now().isoformat(),
             }
-        
+
         # Start background job
         def run_job():
-            print(f"[JOB {job_id}] Starting background job")
             with jobs_lock:
                 if jobs[job_id]["status"] == JobStatus.CANCELLED:
                     return
                 jobs[job_id]["status"] = JobStatus.RUNNING
                 jobs[job_id]["updated_at"] = _utc_now().isoformat()
-            
+
             try:
-                print(f"[JOB {job_id}] Adding user message")
-                # Add user message
-                user_message_id = store.add_message(thread_id, "user", message, {})
-                memory.add_message_embedding(user_message_id, thread_id, message)
-
-                conversation_summary = memory.build_summary(thread_id, message)
-                store.update_thread_summary(thread_id, conversation_summary)
-
-                if _is_job_cancelled(job_id):
-                    return
-
                 # Setup trace collection
                 traces: list[dict[str, Any]] = []
                 trace_lock = threading.Lock()
+                seq = 0
+                pending_crew_completed = False
+                crew_completed_emitted = False
+                seen_tasks: set[str] = set()
 
-                def emit_trace(entry: dict[str, Any]) -> None:
-                    print(f"[JOB {job_id}] Trace: {entry.get('type')}")
+                def emit_trace(event_type: str, task: str | None = None, agent: str | None = None) -> None:
+                    label = _format_task_label(task)
+                    message_text = event_type.replace("_", " ").title()
+                    if event_type == "crew_started":
+                        message_text = "Workflow started"
+                    elif event_type == "crew_completed":
+                        message_text = "Workflow completed"
+                    elif event_type == "crew_failed":
+                        message_text = "Workflow failed"
+                    elif event_type == "task_started":
+                        message_text = f"{label} in progress"
+                    elif event_type == "task_completed":
+                        message_text = f"{label} completed"
+                    elif event_type == "task_failed":
+                        message_text = f"{label} failed"
+
                     with trace_lock:
+                        nonlocal seq
+                        seq += 1
+                        entry = {
+                            "seq": seq,
+                            "type": event_type,
+                            "message": message_text,
+                            "agent": agent,
+                            "task": task,
+                            "timestamp": _utc_now().isoformat(),
+                        }
                         traces.append(entry)
-                        simple_msg = _simplify_trace(entry)
                         with jobs_lock:
-                            jobs[job_id]["traces"].append({
-                                "type": entry.get("type"),
-                                "message": simple_msg,
-                                "agent": entry.get("agent"),
-                                "task": entry.get("task"),
-                                "tool": entry.get("tool"),
-                                "timestamp": _utc_now().isoformat(),
-                            })
+                            jobs[job_id]["traces"] = traces[-10:]
                             jobs[job_id]["updated_at"] = _utc_now().isoformat()
 
-                print(f"[JOB {job_id}] Building crew")
                 # Execute crew
-                inputs = _build_inputs(payload, conversation_summary)
-                
-                print(f"[JOB {job_id}] Executing crew.kickoff()")
+                inputs = _build_inputs(payload)
                 crew = FinanceInsightCrew().build_crew()
-                
+
                 # Store unsubscribe functions to clean up after
                 unsubscribe_funcs = []
-                
+
                 try:
-                    # Add callback to collect events
-                    def event_callback(event):
-                        print(f"[JOB {job_id}] Event received: {type(event).__name__}")
-                        # Emit trace based on event type
-                        if isinstance(event, CrewKickoffStartedEvent):
-                            emit_trace({"type": "crew_started", "summary": "Crew execution started"})
-                        elif isinstance(event, CrewKickoffCompletedEvent):
-                            emit_trace({"type": "crew_completed", "summary": "Crew execution completed"})
-                        elif isinstance(event, TaskStartedEvent):
-                            task_name = getattr(event.task, "name", None) or "task"
-                            agent = getattr(getattr(event.task, "agent", None), "role", None)
-                            emit_trace({"type": "task_started", "task": task_name, "agent": agent, "summary": f"Started {task_name}"})
-                        elif isinstance(event, TaskCompletedEvent):
-                            task_name = getattr(event.task, "name", None) or "task"
-                            agent = getattr(getattr(event.task, "agent", None), "role", None)
-                            emit_trace({"type": "task_completed", "task": task_name, "agent": agent, "summary": f"Completed {task_name}"})
-                    
-                    # Subscribe to all events and store unsubscribe functions
+                    # Subscribe to events and store unsubscribe functions
                     def handler_wrapper(src, evt):
-                        event_callback(evt)
-                    
-                    for event_cls in [CrewKickoffStartedEvent, CrewKickoffCompletedEvent, TaskStartedEvent, TaskCompletedEvent]:
+                        nonlocal pending_crew_completed
+                        nonlocal crew_completed_emitted
+                        if isinstance(evt, CrewKickoffStartedEvent):
+                            emit_trace("crew_started")
+                        elif isinstance(evt, CrewKickoffCompletedEvent):
+                            if crew_completed_emitted:
+                                return
+                            if "report_task" in seen_tasks:
+                                emit_trace("crew_completed")
+                                crew_completed_emitted = True
+                            else:
+                                pending_crew_completed = True
+                        elif isinstance(evt, CrewKickoffFailedEvent):
+                            emit_trace("crew_failed")
+                        elif isinstance(evt, TaskStartedEvent):
+                            task_name = getattr(evt.task, "name", None) or "task"
+                            agent = getattr(getattr(evt.task, "agent", None), "role", None)
+                            emit_trace("task_started", task=task_name, agent=agent)
+                        elif isinstance(evt, TaskCompletedEvent):
+                            task_name = getattr(evt.task, "name", None) or "task"
+                            agent = getattr(getattr(evt.task, "agent", None), "role", None)
+                            emit_trace("task_completed", task=task_name, agent=agent)
+                            seen_tasks.add(task_name)
+                            if task_name == "report_task" and not crew_completed_emitted:
+                                emit_trace("crew_completed")
+                                crew_completed_emitted = True
+                                pending_crew_completed = False
+                        elif isinstance(evt, TaskFailedEvent):
+                            task_name = getattr(evt.task, "name", None) or "task"
+                            agent = getattr(getattr(evt.task, "agent", None), "role", None)
+                            emit_trace("task_failed", task=task_name, agent=agent)
+
+                    for event_cls in [
+                        CrewKickoffStartedEvent,
+                        CrewKickoffCompletedEvent,
+                        CrewKickoffFailedEvent,
+                        TaskStartedEvent,
+                        TaskCompletedEvent,
+                        TaskFailedEvent,
+                    ]:
                         unsub = crewai_event_bus.on(event_cls)(handler_wrapper)
                         unsubscribe_funcs.append(unsub)
-                    
+
                     result = crew.kickoff(inputs=inputs)
                 finally:
                     # Unsubscribe all handlers to prevent memory leaks
-                    print(f"[JOB {job_id}] Unsubscribing {len(unsubscribe_funcs)} event handlers")
                     for unsub in unsubscribe_funcs:
                         try:
                             unsub()
-                        except Exception as e:
-                            print(f"[JOB {job_id}] Error unsubscribing: {e}")
+                        except Exception:
+                            pass
 
                 if _is_job_cancelled(job_id):
                     with jobs_lock:
@@ -1258,9 +440,9 @@ def create_app() -> Flask:
 
                 # Extract and save response
                 final_response, raw_output = _extract_final_response(result)
-                assistant_text = final_response or str(raw_output)
-                assistant_id = store.add_message(thread_id, "assistant", assistant_text, {})
-                memory.add_message_embedding(assistant_id, thread_id, assistant_text)
+                report_text = (final_response or "").strip()
+                if not report_text:
+                    raise ValueError("No report returned from crew.")
 
                 # Update job with result
                 with jobs_lock:
@@ -1269,32 +451,11 @@ def create_app() -> Flask:
                         return
                     jobs[job_id]["status"] = JobStatus.COMPLETED
                     jobs[job_id]["result"] = {
-                        "reply": assistant_text,
-                        "threadId": thread_id,
+                        "report": report_text,
                     }
                     jobs[job_id]["updated_at"] = _utc_now().isoformat()
-                    # Keep only essential data, remove traces to save memory
-                    jobs[job_id]["traces"] = jobs[job_id]["traces"][-5:]  # Keep only last 5 traces
-                
-                # Clean up large objects to free memory IMMEDIATELY
-                print(f"[JOB {job_id}] Cleaning up memory")
-                # Delete local variables if they exist
-                if 'crew' in locals():
-                    del crew
-                if 'result' in locals():
-                    del result
-                if 'traces' in locals():
-                    del traces
-                if 'conversation_summary' in locals():
-                    del conversation_summary
-                if 'inputs' in locals():
-                    del inputs
-                import gc
-                gc.collect()
-                print(f"[JOB {job_id}] Memory cleanup complete, job will auto-expire in {JOB_EXPIRATION_SECONDS}s")
 
             except Exception as e:
-                print(f"[JOB {job_id}] Error: {e}")
                 import traceback
                 traceback.print_exc()
                 with jobs_lock:
@@ -1302,15 +463,11 @@ def create_app() -> Flask:
                         jobs[job_id]["status"] = JobStatus.FAILED
                         jobs[job_id]["error"] = str(e)
                     jobs[job_id]["updated_at"] = _utc_now().isoformat()
-                
-                # Clean up on error too
-                import gc
-                gc.collect()
 
         thread = threading.Thread(target=run_job, daemon=True)
         thread.start()
 
-        return jsonify({"jobId": job_id, "threadId": thread_id, "status": JobStatus.PENDING})
+        return jsonify({"jobId": job_id, "status": JobStatus.PENDING})
 
     @app.get("/chat/async/<job_id>/status")
     def get_job_status(job_id: str):
@@ -1323,7 +480,6 @@ def create_app() -> Flask:
             return jsonify({
                 "jobId": job["id"],
                 "status": job["status"],
-                "threadId": job["thread_id"],
                 "traces": job["traces"][-10:],  # Last 10 traces
                 "traceCount": len(job["traces"]),
                 "updatedAt": job["updated_at"],
@@ -1374,28 +530,6 @@ def create_app() -> Flask:
             # Jobs will be auto-cleaned after JOB_EXPIRATION_SECONDS
             
             return jsonify(result)
-
-    @app.post("/jobs/cleanup")
-    def cleanup_jobs():
-        """Manually trigger job cleanup (admin endpoint)."""
-        import gc
-        now = _utc_now()
-        removed = []
-        
-        with jobs_lock:
-            for job_id, job in list(jobs.items()):
-                # Remove all completed/failed jobs
-                if job["status"] in [JobStatus.COMPLETED, JobStatus.FAILED]:
-                    removed.append(job_id)
-                    del jobs[job_id]
-        
-        gc.collect()
-        
-        return jsonify({
-            "status": "ok",
-            "removed": len(removed),
-            "remaining": len(jobs),
-        })
 
     return app
 

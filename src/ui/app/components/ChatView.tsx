@@ -1,11 +1,31 @@
 "use client";
 
 import { useRef, useState } from "react";
+import React from "react";
 import ChatComposer from "./ChatComposer";
 import ChatEmptyState from "./ChatEmptyState";
 import TopBar from "./TopBar";
-import { cancelJob, sendMessage, type ChatMessage } from "@/lib/api";
-import React from "react";
+import { cancelJob, sendMessage } from "@/lib/api";
+
+type ReportStatus = "queued" | "running" | "ready" | "failed" | "cancelled";
+
+type ReportItem = {
+  id: string;
+  request: string;
+  status: ReportStatus;
+  report?: string;
+  error?: string;
+  createdAt: string;
+  progress: string[];
+};
+
+const STATUS_LABELS: Record<ReportStatus, string> = {
+  queued: "Queued",
+  running: "Running",
+  ready: "Ready",
+  failed: "Failed",
+  cancelled: "Cancelled",
+};
 
 const formatMessageContent = (content: string) => {
   const hasLimitations = content.includes("Limitations:");
@@ -56,13 +76,6 @@ function MessageContent({ content }: { content: string }) {
   );
 }
 
-const createLocalMessage = (role: ChatMessage["role"], content: string) => ({
-  id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
-  role,
-  content,
-  createdAt: new Date().toISOString(),
-});
-
 const formatTime = (value?: string) => {
   if (!value) {
     return "";
@@ -78,14 +91,46 @@ const formatTime = (value?: string) => {
   }
 };
 
+const createReportItem = (request: string): ReportItem => ({
+  id: `local-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+  request,
+  status: "queued",
+  report: "",
+  error: "",
+  createdAt: new Date().toISOString(),
+  progress: [],
+});
+
 export default function ChatView() {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [threadId, setThreadId] = useState<string | undefined>();
+  const [report, setReport] = useState<ReportItem | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
-  const [liveMessages, setLiveMessages] = useState<string[]>([]);
   const abortRef = useRef<AbortController | null>(null);
   const jobIdRef = useRef<string | null>(null);
+  const updateReport = (updater: (current: ReportItem) => ReportItem) => {
+    setReport((current) => (current ? updater(current) : current));
+  };
+
+  const notifyReportReady = (requestText: string) => {
+    if (typeof window === "undefined" || !("Notification" in window)) {
+      return;
+    }
+
+    const title = "Finance Insight";
+    const body = `Report ready: ${requestText}`;
+    if (Notification.permission === "granted") {
+      new Notification(title, { body, tag: "finance-insight-report" });
+      return;
+    }
+
+    if (Notification.permission !== "denied") {
+      Notification.requestPermission().then((permission) => {
+        if (permission === "granted") {
+          new Notification(title, { body, tag: "finance-insight-report" });
+        }
+      });
+    }
+  };
 
   const cancelInFlight = () => {
     if (!isLoading) {
@@ -99,17 +144,19 @@ export default function ChatView() {
     if (jobIdRef.current) {
       void cancelJob(jobIdRef.current);
     }
+    updateReport((current) => ({
+      ...current,
+      status: "cancelled",
+      progress: current.progress.slice(-5),
+    }));
     setIsLoading(false);
-    setLiveMessages([]);
     setError("");
   };
 
-  const handleNewChat = () => {
+  const handleNewRequest = () => {
     cancelInFlight();
-    setMessages([]);
-    setThreadId(undefined);
+    setReport(null);
     setError("");
-    setLiveMessages([]);
   };
 
   const handleSend = async (content: string) => {
@@ -119,48 +166,56 @@ export default function ChatView() {
 
     setError("");
     setIsLoading(true);
-    setLiveMessages([]);
-    setMessages((prev) => [...prev, createLocalMessage("user", content)]);
+
+    const nextReport = createReportItem(content);
+    setReport(nextReport);
+
     const abortController = new AbortController();
     abortRef.current = abortController;
     jobIdRef.current = null;
 
     try {
-      const response = await sendMessage(content, threadId, {
+      const response = await sendMessage(content, {
         onTrace: (message: string) => {
-          setLiveMessages((prev) => [...prev, message]);
+          updateReport((item) => ({
+            ...item,
+            status: "running",
+            progress: [...item.progress, message].slice(-6),
+          }));
         },
         onJobId: (jobId) => {
           jobIdRef.current = jobId;
+          updateReport((item) => ({
+            ...item,
+            id: jobId,
+            status: "running",
+          }));
         },
         signal: abortController.signal,
       });
 
-      if (response.threadId) {
-        setThreadId(response.threadId);
-      }
-
-      if (response.messages?.length) {
-        if (response.messages.length === 1) {
-          setMessages((prev) => [...prev, response.messages[0]]);
-        } else {
-          setMessages(response.messages);
-        }
-      } else if (response.reply) {
-        setMessages((prev) => [
-          ...prev,
-          createLocalMessage("assistant", response.reply || ""),
-        ]);
-      }
-
-      setLiveMessages([]);
+      updateReport((item) => ({
+        ...item,
+        status: "ready",
+        report: response.report || "",
+        progress: item.progress.slice(-6),
+      }));
+      notifyReportReady(content);
     } catch (err) {
       if (err instanceof DOMException && err.name === "AbortError") {
         return;
       }
-      const errorMsg = err instanceof Error ? err.message : "Message failed to send";
+      const errorMsg = err instanceof Error ? err.message : "Request failed";
+      updateReport((item) => ({
+        ...item,
+        status: "failed",
+        error: errorMsg,
+        progress: item.progress.slice(-6),
+      }));
       if (errorMsg.includes("Cannot connect")) {
-        setError("Cannot connect to API server. Please check if the backend is running.");
+        setError(
+          "Cannot connect to API server. Please check if the backend is running.",
+        );
       } else if (errorMsg.toLowerCase().includes("cancelled")) {
         setError("");
       } else {
@@ -173,54 +228,87 @@ export default function ChatView() {
     }
   };
 
+  const hasReport = Boolean(report?.report?.trim());
+
   return (
     <main className="chat-main">
-      <TopBar onNewChat={handleNewChat} />
+      <TopBar onNewChat={handleNewRequest} />
       <section className="chat-content">
-        <div className={`chat-view ${messages.length ? "chat-view--has-messages" : ""}`}>
+        <div className="chat-view">
           {error ? <div className="banner banner-error">{error}</div> : null}
-          <div className={`chat-scroll ${messages.length ? "" : "chat-scroll--empty"}`}>
-            {messages.length ? (
-              <div className="message-list">
-                {messages.map((message) => {
-                  const isUser = message.role === "user";
-                  return (
-                    <div
-                      className={`message ${isUser ? "message--user" : "message--assistant"}`}
-                      key={message.id}
-                    >
-                      {isUser ? <p>{message.content}</p> : <MessageContent content={message.content} />}
-                      {message.createdAt ? (
-                        <span className="message-meta">{formatTime(message.createdAt)}</span>
-                      ) : null}
-                    </div>
-                  );
-                })}
-                {isLoading ? (
-                  <div className="thinking-container">
-                    <span className="thinking-text">Thinking...</span>
-                    {liveMessages.length > 0 ? (
-                      <div className="live-trace-messages">
-                        {liveMessages.slice(-5).map((msg, idx) => (
-                          <div key={idx} className="live-trace-item">
-                            {msg}
-                          </div>
-                        ))}
-                      </div>
-                    ) : null}
+          {report ? (
+            <div className="report-panel">
+              <div
+                className={`report-panel-card ${
+                  report.status === "ready" ? "report-panel-card--ready" : ""
+                } ${
+                  report.status === "running" ? "report-panel-card--running" : ""
+                }`}
+              >
+                <div className="report-panel-header">
+                  <div>
+                    <div className="report-panel-title">Report</div>
+                    <div className="report-panel-request">{report.request}</div>
                   </div>
+                  <div className="report-panel-meta">
+                    <span className={`report-status report-status--${report.status}`}>
+                      {STATUS_LABELS[report.status]}
+                    </span>
+                    {report.status === "ready" ? (
+                      <span className="report-ready-dot" />
+                    ) : null}
+                    <span className="report-time">
+                      {formatTime(report.createdAt)}
+                    </span>
+                  </div>
+                </div>
+
+                {report.error ? (
+                  <div className="banner banner-error">{report.error}</div>
                 ) : null}
+
+                {report.status === "ready" ? (
+                  hasReport ? (
+                    <div className="report-output">
+                      <div className="report-output-title">Report</div>
+                      <MessageContent content={report.report || ""} />
+                    </div>
+                  ) : (
+                    <div className="banner banner-error">
+                      No report returned. Check backend logs for details.
+                    </div>
+                  )
+                ) : report.status === "cancelled" ? (
+                  <div className="report-placeholder">Request cancelled.</div>
+                ) : (
+                  <div className="report-activity">
+                    <div className="report-activity-title">Activity</div>
+                    {report.progress.length ? (
+                      report.progress.slice(-5).map((item, index) => (
+                        <div className="report-activity-item" key={index}>
+                          {item}
+                        </div>
+                      ))
+                    ) : (
+                      <div className="report-activity-empty">
+                        Working on it now...
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
-            ) : (
-              <ChatEmptyState onSelectScenario={handleSend} />
-            )}
-          </div>
-          <ChatComposer
-            disabled={isLoading}
-            loading={isLoading}
-            onSend={handleSend}
-            onStop={cancelInFlight}
-          />
+            </div>
+          ) : (
+            <ChatEmptyState onSelectScenario={handleSend} />
+          )}
+          {!report ? (
+            <ChatComposer
+              disabled={isLoading}
+              loading={isLoading}
+              onSend={handleSend}
+              onStop={cancelInFlight}
+            />
+          ) : null}
         </div>
       </section>
     </main>

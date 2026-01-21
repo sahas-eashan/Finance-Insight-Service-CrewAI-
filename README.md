@@ -6,7 +6,8 @@ Finance Insight Service is an AI-powered assistant for financial research and an
 ## Key Features
 - **Evidence-aware research** - Collects relevant financial context before answering
 - **Deterministic quant** - All numbers are computed, not guessed
-- **Audited responses** - Final output is validated with clear limitations
+- **Audit + report split** - Validation and reporting are separated for clarity
+- **Stateless requests** - Each request runs independently (no chat memory)
 
 
 ## Architecture
@@ -15,7 +16,8 @@ The system runs a sequential workflow with explicit quality gates:
 
 1. **Research** - Collects relevant financial context and evidence
 2. **Quant** - Computes required metrics and scenarios deterministically
-3. **Audit** - Validates outputs and produces the final response
+3. **Audit** - Validates outputs and flags issues
+4. **Report** - Produces the final user-facing response
 
 Design principles:
 - Strict handoff between stages to preserve context and quality
@@ -23,9 +25,6 @@ Design principles:
 - Transparent limitations whenever data is missing or uncertain
 
 ![Architecture diagram](image.png)
-
-## FAISS Context Store
-The project uses FAISS (Facebook AI Similarity Search) for fast semantic retrieval of financial context. The index is stored at `data/faiss.index` and is created/updated automatically on first use.
 
 ## AMP / Choreo Deployment
 

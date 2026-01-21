@@ -537,48 +537,7 @@ a {
   z-index: 0;
 }
 
-.chat-content::before {
-  content: '';
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  width: 520px;
-  height: 220px;
-  background-image: url('/images/WSO2_Software_Logo.png');
-  background-size: contain;
-  background-repeat: no-repeat;
-  background-position: center;
-  opacity: 0.06;
-  pointer-events: none;
-  z-index: 1;
-}
-
-.chat-content::after {
-  content: '';
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  width: 560px;
-  height: 240px;
-  background: radial-gradient(
-    ellipse at center,
-    rgba(255, 255, 255, 0.12) 0%,
-    rgba(255, 255, 255, 0.06) 55%,
-    rgba(255, 255, 255, 0.02) 70%,
-    transparent 80%
-  );
-  filter: blur(10px);
-  opacity: 0.7;
-  pointer-events: none;
-  z-index: 0;
-}
-
-:root[data-theme="dark"] .chat-content::before {
-  filter: brightness(1.5) opacity(0.8);
-  opacity: 0.08;
-}
+ 
 
 .chat-view {
   z-index: 2;
@@ -618,6 +577,185 @@ a {
   display: flex;
   flex-direction: column;
   gap: 12px;
+}
+
+.report-panel {
+  width: 100%;
+  display: flex;
+  justify-content: center;
+}
+
+.report-panel-card {
+  width: 100%;
+  max-width: 980px;
+  border-radius: 22px;
+  border: 1px solid var(--composer-border);
+  background: var(--surface);
+  padding: 22px;
+  box-shadow: 0 20px 40px rgba(10, 30, 50, 0.16);
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  position: relative;
+  overflow: hidden;
+}
+
+.report-panel-card--running::after,
+.report-panel-card--ready::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.18;
+  background: radial-gradient(
+    circle at 20% 0%,
+    rgba(255, 214, 165, 0.45),
+    transparent 55%
+  );
+  z-index: 0;
+}
+
+.report-panel-card--ready {
+  border-color: rgba(47, 158, 68, 0.45);
+  box-shadow:
+    0 24px 50px rgba(47, 158, 68, 0.18),
+    0 18px 36px rgba(10, 30, 50, 0.12);
+}
+
+.report-panel-card--ready::after {
+  opacity: 0.28;
+  background: radial-gradient(
+    circle at 15% 0%,
+    rgba(120, 222, 160, 0.55),
+    transparent 60%
+  );
+  z-index: 0;
+}
+
+.report-panel-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.report-panel-title {
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  color: var(--text-muted);
+}
+
+.report-panel-request {
+  font-size: 18px;
+  font-weight: 500;
+  color: var(--text-primary);
+  margin-top: 8px;
+  line-height: 1.4;
+}
+
+.report-panel-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.report-ready-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: #2f9e44;
+  box-shadow: 0 0 0 4px rgba(47, 158, 68, 0.15);
+}
+
+.report-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  background: var(--pill-bg);
+  color: var(--text-secondary);
+  border: 1px solid var(--pill-border);
+}
+
+.report-status--ready {
+  color: #1f7a3b;
+  border-color: rgba(47, 158, 68, 0.35);
+  background: rgba(47, 158, 68, 0.12);
+}
+
+.report-status--running {
+  color: var(--accent-cool);
+  border-color: rgba(36, 116, 179, 0.35);
+  background: rgba(36, 116, 179, 0.12);
+}
+
+.report-status--failed,
+.report-status--cancelled {
+  color: #b42318;
+  border-color: rgba(180, 35, 24, 0.35);
+  background: rgba(180, 35, 24, 0.12);
+}
+
+.report-time {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.report-activity {
+  display: grid;
+  gap: 6px;
+  padding: 16px;
+  border-radius: 16px;
+  background: var(--pill-bg);
+  border: 1px solid var(--pill-border);
+}
+
+.report-activity-title {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--text-muted);
+}
+
+.report-activity-item {
+  font-size: 14px;
+  color: var(--text-secondary);
+}
+
+.report-activity-empty {
+  font-size: 14px;
+  color: var(--text-muted);
+}
+
+.report-output {
+  font-size: 14px;
+  line-height: 1.7;
+  color: var(--text-primary);
+  background: var(--pill-bg);
+  border-radius: 16px;
+  padding: 18px;
+  border: 1px solid var(--pill-border);
+}
+
+.report-output-title {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--text-muted);
+  margin-bottom: 12px;
+}
+
+.report-output .message-main-content {
+  white-space: pre-wrap;
+}
+
+.report-placeholder {
+  font-size: 14px;
+  color: var(--text-muted);
 }
 
 .message {
@@ -863,6 +1001,12 @@ a {
   color: #cc3333;
 }
 
+.banner-success {
+  border: 1px solid rgba(47, 158, 68, 0.25);
+  background: rgba(47, 158, 68, 0.1);
+  color: #1f7a3b;
+}
+
 .empty-state h1 {
   font-size: 26px;
   font-weight: 500;
@@ -954,6 +1098,7 @@ a {
   width: 100%;
   display: flex;
   justify-content: center;
+  margin-top: auto;
 }
 
 .composer-card {
@@ -1569,6 +1714,10 @@ a {
   .chat-main {
     padding: 18px 20px 28px;
     margin-left: 240px;
+  }
+
+  .report-panel-card {
+    padding: 18px;
   }
 }
 

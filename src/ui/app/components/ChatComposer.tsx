@@ -53,7 +53,7 @@ export default function ChatComposer({
             setValue(e.target.value)
           }
           onKeyDown={handleKeyDown}
-          placeholder="Ask about stocks, market data, or financial news..."
+          placeholder="Describe the report you want (company, macro, or market topic)..."
           disabled={disabled}
           rows={2}
         />

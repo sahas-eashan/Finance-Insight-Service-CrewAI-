@@ -18,7 +18,7 @@ export default function TopBar({ onNewChat }: TopBarProps) {
       </div>
       <div className="topbar-right">
         <button className="button-secondary" onClick={onNewChat} type="button">
-          New chat
+          New request
         </button>
         <Link className="button-secondary" href="/settings">
           Settings

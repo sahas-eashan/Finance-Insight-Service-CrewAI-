@@ -33,7 +33,7 @@ export default function ChatEmptyState({ onSelectScenario }: ChatEmptyStateProps
     <div className="empty-state">
       <h1>Welcome to Finance Insight</h1>
       <p className="empty-state-subtitle">
-        Start with a quick scenario or just ask your question.
+        Submit a request and we will generate a report when it is ready.
       </p>
       <div className="scenario-grid">
         {SCENARIOS.map((scenario) => (

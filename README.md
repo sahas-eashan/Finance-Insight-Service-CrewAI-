@@ -7,10 +7,9 @@ Finance Insight Service is an AI-powered assistant for financial research and an
 - **Evidence-aware research** - Collects relevant financial context before answering
 - **Deterministic quant** - All numbers are computed, not guessed
 - **Audited responses** - Final output is validated with clear limitations
-- **Scenario-ready** - Supports structured prompts for common analysis workflows
+
 
 ## Architecture
-![Architecture Diagram](https://github.com/sahas-eashan/Finance-Insight-Service-CrewAI-/blob/app/image.png)
 
 The system runs a sequential workflow with explicit quality gates:
 
@@ -22,6 +21,8 @@ Design principles:
 - Strict handoff between stages to preserve context and quality
 - Deterministic computations instead of LLM-generated numbers
 - Transparent limitations whenever data is missing or uncertain
+
+![Architecture diagram](image.png)
 
 ## FAISS Context Store
 The project uses FAISS (Facebook AI Similarity Search) for fast semantic retrieval of financial context. The index is stored at `data/faiss.index` and is created/updated automatically on first use.
@@ -85,6 +86,3 @@ See `API_KEYS.md` for key setup details.
 
 ## Contributing
 Open an issue or submit a pull request with clear context and test notes.
-
-## License
-See `LICENSE`.

@@ -1,7 +1,7 @@
 # Finance Insight Service
 
 ## Overview
-Finance Insight Service is an AI-powered assistant for financial research and analysis. It combines current market context with deterministic calculations to deliver concise, evidence-aware responses.
+Finance Insight Service is a stateless, async report generator for financial research and analysis. It combines current market context with deterministic calculations to deliver concise, evidence-aware responses.
 
 ## Key Features
 - **Evidence-aware research** - Collects relevant financial context before answering
@@ -12,12 +12,24 @@ Finance Insight Service is an AI-powered assistant for financial research and an
 
 ## Architecture
 
-The system runs a sequential workflow with explicit quality gates:
+The system runs a sequential, agent-based workflow with explicit quality gates:
 
 1. **Research** - Collects relevant financial context and evidence
 2. **Quant** - Computes required metrics and scenarios deterministically
 3. **Audit** - Validates outputs and flags issues
 4. **Report** - Produces the final user-facing response
+
+Request flow (stateless):
+- UI submits a request to `/chat/async`
+- API server starts a background job and emits progress traces
+- UI polls `/chat/async/<job_id>/status` and fetches `/result` when complete
+
+Core components:
+- **Scenario UI** (web) for request submission and report viewing
+- **API server (Flask)** for async job execution and status/result APIs
+- **Agent orchestrator (CrewAI)** running Research → Quant → Audit → Report
+- **Tools**: SerpAPI news search, Twelve Data OHLCV, Alpha Vantage fundamentals, Safe Python Exec
+- **LLM provider**: OpenAI for reasoning and embeddings in tools
 
 Design principles:
 - Strict handoff between stages to preserve context and quality

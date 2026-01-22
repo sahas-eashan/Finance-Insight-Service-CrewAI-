@@ -12,6 +12,7 @@ from typing import Any
 from dotenv import load_dotenv
 from flask import Flask, jsonify, request
 from flask_cors import CORS
+from openinference.instrumentation.crewai import CrewAIInstrumentor
 
 # Disable CrewAI interactive tracing prompt that causes timeout in containerized environments
 os.environ.setdefault("CREWAI_TRACING_ENABLED", "false")
@@ -203,6 +204,8 @@ def _build_inputs(payload: dict[str, Any]) -> dict[str, Any]:
 
 def create_app() -> Flask:
     load_dotenv()
+    CrewAIInstrumentor().instrument()
+
     app = Flask(__name__)
     CORS(app, resources={
         r"/*": {

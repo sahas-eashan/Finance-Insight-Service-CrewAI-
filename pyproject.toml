@@ -7,6 +7,7 @@ requires-python = ">=3.10"
 dependencies = [
   "crewai[tools]>=0.83.0",
   "crewai-tools>=0.28.0",
+  "openinference-instrumentation-crewai>=0.1.0",
   "flask>=3.0.0",
   "flask-cors>=4.0.0",
   "numpy>=1.26.4",
@@ -16,9 +17,6 @@ dependencies = [
 ]
 
 [project.scripts]
-research_agent = "finance_insight_service.main:main"
-quant_agent = "finance_insight_service.quant_main:main"
-finance_insight = "finance_insight_service.full_main:main"
 finance_insight_api = "finance_insight_service.api_server:main"
 
 [tool.uv]

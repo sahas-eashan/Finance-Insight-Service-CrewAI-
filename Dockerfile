@@ -7,15 +7,18 @@ WORKDIR /app
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends build-essential libgomp1 \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --create-home --shell /usr/sbin/nologin appuser
 
 COPY . .
+RUN chown -R appuser:appuser /app
 
 RUN pip install --no-cache-dir uv \
     && uv sync --frozen
 
 ENV VIRTUAL_ENV=/app/.venv
 ENV PATH="$VIRTUAL_ENV/bin:$PATH"
+USER appuser
 
 EXPOSE 8000
 

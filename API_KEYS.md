@@ -105,10 +105,9 @@ Environment="TWELVE_DATA_API_KEY=..."
 Environment="ALPHAVANTAGE_API_KEY=..."
 ```
 
-**Cloud Platforms:**
-- AWS: Use Parameter Store or Secrets Manager
-- Heroku: Set Config Vars in dashboard
-- Render/Railway: Use environment variables in UI
+**OpenChoreo / AMP:**
+- Set these as environment variables when creating or updating the agent in the AMP UI.
+
 
 ## Required Keys
 

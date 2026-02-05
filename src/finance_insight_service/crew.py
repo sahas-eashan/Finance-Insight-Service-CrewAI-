@@ -19,6 +19,7 @@ class FinanceInsightCrew:
 
     @agent
     def researcher(self) -> Agent:
+        """Create the research agent."""
         return Agent(
             config=self.agents_config["researcher"],
             tools=[SerpApiNewsSearchTool(), ScrapeWebsiteTool()],
@@ -28,6 +29,7 @@ class FinanceInsightCrew:
 
     @agent
     def quant(self) -> Agent:
+        """Create the quantitative analysis agent."""
         return Agent(
             config=self.agents_config["quant"],
             tools=[
@@ -41,6 +43,7 @@ class FinanceInsightCrew:
 
     @agent
     def auditor(self) -> Agent:
+        """Create the audit agent."""
         return Agent(
             config=self.agents_config["auditor"],
             verbose=True,
@@ -49,6 +52,7 @@ class FinanceInsightCrew:
 
     @agent
     def reporter(self) -> Agent:
+        """Create the report-writing agent."""
         return Agent(
             config=self.agents_config["reporter"],
             verbose=True,
@@ -57,6 +61,7 @@ class FinanceInsightCrew:
 
     @task
     def research_task(self) -> Task:
+        """Build the research task definition."""
         return Task(
             config=self.tasks_config["research_task"],
             agent=self.researcher(),
@@ -65,6 +70,7 @@ class FinanceInsightCrew:
 
     @task
     def quant_task(self) -> Task:
+        """Build the quantitative analysis task definition."""
         return Task(
             config=self.tasks_config["quant_task"],
             agent=self.quant(),
@@ -73,6 +79,7 @@ class FinanceInsightCrew:
 
     @task
     def audit_task(self) -> Task:
+        """Build the audit task definition."""
         return Task(
             config=self.tasks_config["audit_task"],
             agent=self.auditor(),
@@ -81,6 +88,7 @@ class FinanceInsightCrew:
 
     @task
     def report_task(self) -> Task:
+        """Build the report task definition."""
         return Task(
             config=self.tasks_config["report_task"],
             agent=self.reporter(),
@@ -90,6 +98,7 @@ class FinanceInsightCrew:
     def build_crew(
         self, task_names: list[str] | None = None, include_all_agents: bool = True
     ) -> Crew:
+        """Build a crew with selected tasks and agents."""
         research_task = self.research_task()
         quant_task = self.quant_task()
         audit_task = self.audit_task()
@@ -150,4 +159,3 @@ class FinanceInsightCrew:
     def crew(self) -> Crew:
         """Creates the Finance Insight crew."""
         return self.build_crew()
-

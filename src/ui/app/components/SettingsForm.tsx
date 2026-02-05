@@ -245,8 +245,10 @@ ALPHAVANTAGE_API_KEY=${keys.alphaVantage}
       </div>
 
       <div className="settings-hint">
-        <strong>Note:</strong> Keys are stored locally in your browser. Click "Export .env file" 
-        to download a .env file, then copy it to your project root and restart the backend.
+        <strong>Security warning:</strong> Keys are stored in your browser's localStorage, which
+        is vulnerable to XSS. Use this only for local development, not production. Click
+        "Export .env file" to download a .env file, then copy it to your project root and
+        restart the backend.
       </div>
     </form>
   );

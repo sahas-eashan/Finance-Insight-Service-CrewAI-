@@ -8,7 +8,6 @@ import statistics
 import time
 import traceback
 import textwrap
-from json import JSONDecodeError, JSONDecoder
 from typing import Any
 from contextlib import redirect_stdout
 
@@ -29,7 +28,11 @@ class SafePythonExecArgs(BaseModel):
 
 
 class SafePythonExecTool(BaseTool):
-    """CrewAI tool for executing sandboxed Python code."""
+    """CrewAI tool for executing restricted, trusted Python code only.
+
+    This is a best-effort sandbox intended for agent-generated code in a
+    controlled environment. It is not safe for untrusted or adversarial input.
+    """
     name: str = "safe_python_exec"
     description: str = (
         "Executes Python code in a restricted environment and returns a status JSON. "
@@ -86,6 +89,9 @@ class SafePythonExecTool(BaseTool):
             "sorted": sorted,
             "str": str,
             "sum": sum,
+            # NOTE: Including `type` enables basic introspection. This sandbox is
+            # only for trusted, agent-generated code and is not a security
+            # boundary for untrusted input.
             "type": type,
             "zip": zip,
         }
@@ -174,17 +180,17 @@ def _parse_json_payload(value: object):
         if isinstance(parsed, str):
             return _parse_json_payload(parsed)
         return _normalize_parsed_payload(parsed)
-    except JSONDecodeError:
+    except json.JSONDecodeError:
         pass
 
-    decoder = JSONDecoder()
+    decoder = json.JSONDecoder()
     for start in (text.find("{"), text.find("[")):
         if start == -1:
             continue
         try:
             parsed, _ = decoder.raw_decode(text[start:])
             return _normalize_parsed_payload(parsed)
-        except JSONDecodeError:
+        except json.JSONDecodeError:
             continue
 
     try:
@@ -208,7 +214,7 @@ def _normalize_parsed_payload(payload: Any):
                     try:
                         normalized.append(json.loads(text))
                         continue
-                    except JSONDecodeError:
+                    except json.JSONDecodeError:
                         pass
                     try:
                         normalized.append(ast.literal_eval(text))

@@ -38,7 +38,7 @@ class JobStatus(str, Enum):
     CANCELLED = "cancelled"
 
 
-# In-memory job storage (for production, use Redis or database)
+# In-memory job storage ; This sample assumes a single replica; multiple replicas will not share job state.
 jobs = {}
 jobs_lock = threading.Lock()
 JOB_EXPIRATION_SECONDS = 600  # Jobs expire after 10 minutes (reduced to free memory faster)
@@ -71,7 +71,7 @@ def _cleanup_expired_jobs():
                     if updated_str:
                         try:
                             updated_time = datetime.fromisoformat(updated_str.replace('Z', '+00:00'))
-                        except:
+                        except (ValueError, TypeError):
                             continue
                         
                         age_seconds = (now - updated_time).total_seconds()
@@ -217,9 +217,18 @@ def create_app() -> Flask:
     CrewAIInstrumentor().instrument()
 
     app = Flask(__name__)
+    allowed_origins_env = os.getenv("CORS_ALLOWED_ORIGINS", "").strip()
+    if allowed_origins_env:
+        allowed_origins = [
+            origin.strip()
+            for origin in allowed_origins_env.split(",")
+            if origin.strip()
+        ]
+    else:
+        allowed_origins = "*"
     CORS(app, resources={
         r"/*": {
-            "origins": "*",
+            "origins": allowed_origins,
             "methods": ["GET", "POST", "OPTIONS"],
             "allow_headers": ["Content-Type", "Authorization", "X-API-Key"],
             "expose_headers": ["Content-Type"],
@@ -386,7 +395,7 @@ def create_app() -> Flask:
 
                 # Execute crew
                 inputs = _build_inputs(payload)
-                crew = FinanceInsightCrew().build_crew()
+                crew = FinanceInsightCrew(job_id=job_id).build_crew()
 
                 # Store unsubscribe functions to clean up after
                 unsubscribe_funcs = []
@@ -396,6 +405,9 @@ def create_app() -> Flask:
                     def handler_wrapper(src, evt):
                         nonlocal pending_crew_completed
                         nonlocal crew_completed_emitted
+                        evt_crew_name = getattr(evt, "crew_name", None)
+                        if evt_crew_name and evt_crew_name != crew.name:
+                            return
                         if isinstance(evt, CrewKickoffStartedEvent):
                             emit_trace("crew_started")
                         elif isinstance(evt, CrewKickoffCompletedEvent):

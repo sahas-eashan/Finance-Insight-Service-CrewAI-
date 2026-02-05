@@ -38,7 +38,12 @@ export default function SettingsForm() {
     setApiKey(config.apiKey ?? "");
     
     // Load keys from localStorage
-    const savedKeys = localStorage.getItem("financeApiKeys");
+    let savedKeys: string | null = null;
+    try {
+      savedKeys = localStorage.getItem("financeApiKeys");
+    } catch (error) {
+      console.warn("[Settings] localStorage unavailable:", error);
+    }
     if (savedKeys) {
       try {
         const parsed = JSON.parse(savedKeys) as Partial<ApiKeys> & {
@@ -66,7 +71,11 @@ export default function SettingsForm() {
     const trimmedKey = apiKey.trim();
 
     setApiConfig({ baseUrl: trimmedBase, apiKey: trimmedKey });
-    localStorage.setItem("financeApiKeys", JSON.stringify(keys));
+    try {
+      localStorage.setItem("financeApiKeys", JSON.stringify(keys));
+    } catch (error) {
+      console.warn("[Settings] localStorage unavailable:", error);
+    }
     
     setStatus("saved");
     setMessage("Settings and API keys saved locally. Restart backend to use new keys.");
